@@ -14,8 +14,6 @@ from PIL import Image, ImageTk
 from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED 
 from picamera2 import Picamera2
 
-#git test
-
 # ==========================================
 #         CONFIGURATION
 # ==========================================
