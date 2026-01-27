@@ -310,10 +310,21 @@ def update_frame():
     cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), ROI_COLOR, 3) 
     roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
 
+    # Initialize timing variables
+    t_detect_ms = 0.0
+    t_extract_ms = 0.0
+    t_compare_ms = 0.0
+    t_log_ms = 0.0
+    
     # --- INFERENCE ---
     if not is_gate_busy and system_state in ["SCANNING", "DETECTING CAR", "UNAUTHORIZED DETECTED"]:
-        results = model(roi_crop, verbose=False, conf=0.4) 
         
+        # 1. MEASURE DETECTION TIME
+        t0 = time.perf_counter()
+        results = model(roi_crop, verbose=False, conf=0.4) 
+        t1 = time.perf_counter()
+        t_detect_ms = (t1 - t0) * 1000
+
         detected_box = False
         for result in results:
             boxes = result.boxes.xyxy.cpu().numpy()
@@ -329,50 +340,87 @@ def update_frame():
                     if time_seen > GRACE_PERIOD:
                         p_crop = roi_crop[y1:y2, x1:x2]
                         if p_crop.size > 0:
+                            
+                            # 2. MEASURE EXTRACTION TIME
+                            t2 = time.perf_counter()
+                            
                             processed_plate = preprocess_plate(p_crop)
                             ocr_res = reader.readtext(processed_plate, detail=0)
                             
-                            # --- FIXED LOGIC START ---
-                            # Join all detected parts and uppercase
+                            # Join text and Fix Order
                             raw_text = "".join(ocr_res).upper()
-                            
-                            # Separate letters and numbers
                             letters = "".join([c for c in raw_text if c.isalpha()])
                             numbers = "".join([c for c in raw_text if c.isdigit()])
-                            
-                            # Force correct order: Letters first, then numbers
                             clean_text = letters + numbers
-                            # --- FIXED LOGIC END ---
                             
+                            t3 = time.perf_counter()
+                            t_extract_ms = (t3 - t2) * 1000
+
                             if clean_text:
                                 lbl_debug.config(text=f"Last Read: {clean_text}")
-                                print(f"Detected: {clean_text}")
 
                             if len(clean_text) > 3: 
+                                
+                                # 3. MEASURE COMPARISON TIME
+                                t4 = time.perf_counter()
+                                
                                 if clean_text not in first_sight_times: first_sight_times[clean_text] = time.time()
                                 scan_buffer.append(clean_text)
+                                
+                                log_triggered = False
                                 
                                 if len(scan_buffer) > 0:
                                     most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                     cur_t = time.time()
                                     last_log = logged_vehicles.get(most_common, 0)
+                                    
+                                    # Comparison logic (checking db and buffer)
+                                    is_authorized = most_common in authorized_plates
+                                    
+                                    t5 = time.perf_counter()
+                                    t_compare_ms = (t5 - t4) * 1000
 
                                     if (cur_t - last_log) > LOG_COOLDOWN:
                                         start_t = first_sight_times.get(most_common, cur_t)
                                         latency = cur_t - start_t
                                         
-                                        if most_common in authorized_plates:
+                                        # 4. MEASURE LOGGING TIME (Only if log happens)
+                                        if is_authorized:
                                             row = auth_df[auth_df['Plate'] == most_common].iloc[0]
+                                            
+                                            t6 = time.perf_counter()
                                             log_to_gui_and_csv(most_common, row['Name'], row['Faculty'], "AUTHORIZED", latency)
+                                            t7 = time.perf_counter()
+                                            t_log_ms = (t7 - t6) * 1000
+                                            
                                             logged_vehicles[most_common] = cur_t
                                             if most_common in first_sight_times: del first_sight_times[most_common]
                                             scan_buffer.clear() 
+                                            log_triggered = True
                                             
                                         elif freq >= CONFIDENCE_THRESHOLD:
+                                            t6 = time.perf_counter()
                                             log_to_gui_and_csv(most_common, "Unknown", "Visitor", "UNAUTHORIZED", latency)
+                                            t7 = time.perf_counter()
+                                            t_log_ms = (t7 - t6) * 1000
+                                            
                                             logged_vehicles[most_common] = cur_t
                                             if most_common in first_sight_times: del first_sight_times[most_common]
                                             scan_buffer.clear()
+                                            log_triggered = True
+                                
+                                # PRINT METRICS TO TERMINAL
+                                # We print if a log occurred OR just to show performance on successful reads
+                                print(f"[PERFORMANCE METRICS] Plate: {clean_text}")
+                                print(f"  > Detection  : {t_detect_ms:.2f} ms")
+                                print(f"  > Extraction : {t_extract_ms:.2f} ms")
+                                print(f"  > Comparison : {t_compare_ms:.2f} ms")
+                                if log_triggered:
+                                    print(f"  > Logging    : {t_log_ms:.2f} ms")
+                                else:
+                                    print(f"  > Logging    : (Skipped/Cooldown)")
+                                print("-" * 40)
+
         if not detected_box:
             detection_start_time = None
 
