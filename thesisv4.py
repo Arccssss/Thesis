@@ -49,11 +49,9 @@ try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
     gate_p2 = OutputDevice(GATE_PIN_2, active_high=True, initial_value=True)
     
-    # --- HARDWARE ADAPTATION START ---
-    # Increased max_distance to 4.0 to utilize the 5V power boost.
-    # Added queue_len=3 to provide software smoothing for the cleaner signal.
-    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=4.0, queue_len=3)
-    # --- HARDWARE ADAPTATION END ---
+    # REVERTED: max_distance back to 2.0 to stop the lag.
+    # We keep queue_len=3 for stability since you are using 5V.
+    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=2.0, queue_len=3)
     
     buzzer = Buzzer(BUZZER_PIN)
     led_open = LED(LED_OPEN_PIN)
@@ -62,13 +60,13 @@ try:
     led_open.off()
     led_close.on()
     
+    # --- CAMERA CONFIGURATION ---
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (1920, 1080)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
-    
     picam2.start()
-    print("✅ Hardware & Picamera2 Initialized (5V Ultrasonic Logic Applied)")
+    print("✅ Hardware & Picamera2 Initialized (Ultrasonic Reverted to 2m)")
     
 except Exception as e:
     print(f"⚠️ HARDWARE ERROR: {e}")
@@ -102,6 +100,7 @@ notebook.add(tab_camera, text=" LIVE CAMERA ")
 notebook.add(tab_logs, text=" CURRENT SESSION ")
 notebook.add(tab_history, text=" PAST HISTORY ")
 
+# Camera Tab
 video_frame_container = tk.Frame(tab_camera, bg="#202020")
 video_frame_container.pack(fill="both", expand=True)
 video_label = tk.Label(video_frame_container, bg="black")
@@ -116,6 +115,7 @@ lbl_dist.pack(side="right", padx=10, pady=5)
 lbl_debug = tk.Label(status_frame, text="Last Read: None", font=("Arial", 10), bg="#333", fg="yellow")
 lbl_debug.pack(side="right", padx=10)
 
+# Logs Tab
 cols_current = ("time", "plate", "owner", "status", "latency")
 tree = ttk.Treeview(tab_logs, columns=cols_current, show="headings", height=12)
 for col in cols_current: 
@@ -125,6 +125,7 @@ tree.pack(side="left", fill="both", expand=True)
 tree.tag_configure("authorized", foreground="green")
 tree.tag_configure("unauthorized", foreground="red")
 
+# History Tab
 tree_history = ttk.Treeview(tab_history, columns=cols_current, show="headings", height=12)
 for col in cols_current: 
     tree_history.heading(col, text=col.capitalize())
@@ -156,13 +157,16 @@ try:
     auth_df = pd.read_csv(AUTH_FILE, dtype=str)
     auth_df['Plate'] = auth_df['Plate'].str.strip().str.upper()
     authorized_plates = auth_df['Plate'].tolist()
+    print(f"Loaded {len(authorized_plates)} authorized plates.")
 except Exception as e: 
     print(f"⚠️ Error loading database: {e}")
     authorized_plates = []
     auth_df = pd.DataFrame(columns=["Plate", "Name", "Faculty"])
 
+print("Loading AI Models... Please wait.")
 reader = easyocr.Reader(['en'], gpu=False) 
 model = YOLO('./best_ncnn_model') 
+print("✅ AI Models Loaded")
 
 def set_status(status_text, color="white"):
     global system_state
@@ -188,6 +192,7 @@ def load_history_data():
 def log_to_gui_and_csv(plate, name, faculty, status, latency):
     ts_long = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ts_short = datetime.now().strftime("%H:%M:%S")
+    print(f"📝 LOGGING: {plate} - {status}") 
     try:
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         tree.insert("", 0, values=(ts_short, plate, name, status, f"{latency:.2f}s"), tags=(tag,))
@@ -218,6 +223,7 @@ def reset_gate_system():
     gate_p2.on() 
     led_open.off()
     led_close.on()
+    
     is_gate_busy = False
     vehicle_entry_start_time = None
     vehicle_confirmed = False
@@ -236,21 +242,22 @@ def trigger_gate_sequence():
     if is_gate_busy: return 
     is_gate_busy = True
     set_status("OPENING GATE", "green")
+    
     gate_p1.on()
     gate_p2.off() 
     led_open.on()
     led_close.off()
+    
     root.after(GATE_ACTION_TIME, lambda: root.after(100, smart_gate_check))
 
 def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
+    
     try:
-        # UPDATED: Distance conversion with higher range logic
         dist_cm = sensor.distance * 100
-        
-        # Display logic for UI - Handles the new 4m (400cm) limit
-        if dist_cm >= 395:
-            lbl_dist.config(text="DIST: > 400 cm", fg="white")
+        # REVERTED: Range check for 2m
+        if dist_cm >= 198:
+            lbl_dist.config(text="DIST: > 200 cm", fg="white")
         else:
             lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
@@ -263,8 +270,10 @@ def smart_gate_check():
                 if dist_cm < SAFETY_DISTANCE_CM:
                     if vehicle_entry_start_time is None: vehicle_entry_start_time = time.time()
                     elapsed = time.time() - vehicle_entry_start_time
+                    
                     if elapsed >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
+                        print(">> Vehicle Entered.")
                 else:
                     vehicle_entry_start_time = None
             else:
@@ -275,6 +284,7 @@ def smart_gate_check():
         elif not is_gate_busy and dist_cm > SAFETY_DISTANCE_CM:
              if system_state == "DETECTING CAR":
                  set_status("SCANNING", "white")
+
     except: pass
     
     if is_gate_busy or system_state == "DETECTING CAR":
@@ -284,12 +294,14 @@ def smart_gate_check():
 
 def update_frame():
     global detection_start_time, last_plate_seen_time
+    
     try:
         if picam2: frame = picam2.capture_array()
         else:
             frame = np.zeros((540, 960, 3), dtype=np.uint8) 
             cv2.putText(frame, "NO CAMERA", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    except:
+    except Exception as e:
+        print(f"Cam Error: {e}")
         root.after(100, update_frame)
         return
 
@@ -333,7 +345,9 @@ def update_frame():
                             processed_plate = preprocess_plate(p_crop)
                             ocr_res = reader.readtext(processed_plate, detail=0)
                             raw_text = "".join(ocr_res).upper()
-                            clean_text = "".join([c for c in raw_text if c.isalnum()])
+                            letters = "".join([c for c in raw_text if c.isalpha()])
+                            numbers = "".join([c for c in raw_text if c.isdigit()])
+                            clean_text = letters + numbers
                             t3 = time.perf_counter()
                             t_extract_ms = (t3 - t2) * 1000
 
@@ -344,6 +358,7 @@ def update_frame():
                                     if clean_text not in first_sight_times: first_sight_times[clean_text] = current_time
                                     scan_buffer.append(clean_text)
                                     log_triggered = False
+                                    
                                     if len(scan_buffer) > 0:
                                         most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                         cur_t = current_time
@@ -374,26 +389,33 @@ def update_frame():
                                                 scan_buffer.clear()
                                                 log_triggered = True
 
-                                    print(f"[PERF] Plate: {clean_text} | Det: {t_detect_ms:.1f}ms | Ext: {t_extract_ms:.1f}ms")
+                                    print(f"[PERFORMANCE METRICS] Plate: {clean_text}")
+                                    print(f"  > Detection  : {t_detect_ms:.2f} ms")
+                                    print(f"  > Extraction : {t_extract_ms:.2f} ms")
+                                    print(f"  > Comparison : {t_compare_ms:.2f} ms")
+                                    if log_triggered: print(f"  > Logging    : {t_log_ms:.2f} ms")
+                                    print("-" * 40)
 
         if not detected_box:
             if detection_start_time is not None:
                 if (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
-                    print(">> Resetting Session Latency.")
+                    print(">> No plate detected for 2.5s. Resetting latency.")
                     detection_start_time = None
                     scan_buffer.clear()
                     first_sight_times.clear()
 
-    win_w, win_h = video_frame_container.winfo_width(), video_frame_container.winfo_height()
+    # Dynamic Resizing Logic
+    win_w = video_frame_container.winfo_width()
+    win_h = video_frame_container.winfo_height()
     if win_w < 10 or win_h < 10: win_w, win_h = 640, 480
     img_h, img_w, _ = frame.shape
-    aspect = img_w / img_h
-    if win_w / win_h > aspect:
+    aspect_ratio = img_w / img_h if img_h > 0 else 1.77 
+    if win_w / win_h > aspect_ratio:
         new_h = win_h
-        new_w = int(new_h * aspect)
+        new_w = int(new_h * aspect_ratio)
     else:
         new_w = win_w
-        new_h = int(new_w / aspect)
+        new_h = int(new_w / aspect_ratio)
 
     try:
         img_small = cv2.resize(frame, (new_w, new_h))
@@ -401,19 +423,25 @@ def update_frame():
         imgtk = ImageTk.PhotoImage(image=img)
         video_label.imgtk = imgtk
         video_label.configure(image=imgtk)
-    except: pass
+    except Exception as e: print(f"Display Error: {e}")
 
     root.after(10, update_frame)
 
+# ==========================================
+#         MAIN EXECUTION
+# ==========================================
 load_history_data()
 root.after(500, smart_gate_check)
 root.after(500, update_frame)
+print("🚀 System Starting...")
 try:
     root.mainloop()
 except KeyboardInterrupt:
-    pass
+    print("Shutting down...")
 finally:
     if picam2: picam2.stop()
     gate_p1.close()
     gate_p2.on()
+    led_open.off()
+    led_close.on()
     print("System Shutdown")
