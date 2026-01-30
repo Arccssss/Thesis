@@ -15,7 +15,7 @@ from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED
 from picamera2 import Picamera2
 
 # ==========================================
-#         CONFIGURATION
+#          CONFIGURATION
 # ==========================================
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
@@ -29,7 +29,7 @@ GRACE_PERIOD = 0.3
 GATE_ACTION_TIME = 3000 
 ABSENCE_RESET_TIME = 2.5 
 
-# UPDATED: Safety distance reduced to 50cm
+# UPDATED: Safety distance and logic thresholds
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
 SENSOR_POLL_RATE = 100    
@@ -44,14 +44,15 @@ LED_OPEN_PIN = 5
 LED_CLOSE_PIN = 6  
 
 # ==========================================
-#         HARDWARE INITIALIZATION
+#          HARDWARE INITIALIZATION
 # ==========================================
 try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
     gate_p2 = OutputDevice(GATE_PIN_2, active_high=True, initial_value=True)
     
-    # max_distance 4.0 for 5V hardware mode
-    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=4.0, queue_len=3)
+    # UPDATED: max_distance set to 1.5m as requested.
+    # queue_len=3 is kept to smooth out jitter from the 330/470 ohm signal.
+    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.5, queue_len=3)
     
     buzzer = Buzzer(BUZZER_PIN)
     led_open = LED(LED_OPEN_PIN)
@@ -65,7 +66,7 @@ try:
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
     picam2.start()
-    print(f"✅ Hardware Initialized (Safety Distance: {SAFETY_DISTANCE_CM}cm)")
+    print(f"✅ Hardware Initialized (Max Range: 1.5m | Safety: {SAFETY_DISTANCE_CM}cm)")
     
 except Exception as e:
     print(f"⚠️ HARDWARE ERROR: {e}")
@@ -83,7 +84,7 @@ except Exception as e:
     picam2 = None 
 
 # ==========================================
-#         GUI SETUP (Tkinter)
+#          GUI SETUP (Tkinter)
 # ==========================================
 root = tk.Tk()
 root.title("RPi 5 Smart Access Control")
@@ -114,7 +115,6 @@ lbl_dist.pack(side="right", padx=10, pady=5)
 lbl_debug = tk.Label(status_frame, text="Last Read: None", font=("Arial", 10), bg="#333", fg="yellow")
 lbl_debug.pack(side="right", padx=10)
 
-# Logs/History tables
 cols_current = ("time", "plate", "owner", "status", "latency")
 tree = ttk.Treeview(tab_logs, columns=cols_current, show="headings", height=12)
 for col in cols_current: 
@@ -139,7 +139,7 @@ btn_refresh = tk.Button(tab_history, text="Refresh Logs", command=lambda: load_h
 btn_refresh.pack(side="bottom", fill="x", pady=5)
 
 # ==========================================
-#         LOGIC & HELPERS
+#          LOGIC & HELPERS
 # ==========================================
 logged_vehicles = {} 
 scan_buffer = deque(maxlen=SCAN_BUFFER_LEN)
@@ -159,7 +159,6 @@ except:
     authorized_plates = []
     auth_df = pd.DataFrame(columns=["Plate", "Name", "Faculty"])
 
-print("Loading AI Models...")
 reader = easyocr.Reader(['en'], gpu=False) 
 model = YOLO('./best_ncnn_model') 
 
@@ -230,8 +229,11 @@ def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
     try:
         dist_cm = sensor.distance * 100
-        if dist_cm >= 395: lbl_dist.config(text="DIST: > 400 cm", fg="white")
-        else: lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
+        # UPDATED Logic for 1.5m range display
+        if dist_cm >= 148:
+            lbl_dist.config(text="DIST: > 150 cm", fg="white")
+        else:
+            lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
         if dist_cm < SAFETY_DISTANCE_CM:
             if not is_gate_busy and system_state != "UNAUTHORIZED DETECTED":
