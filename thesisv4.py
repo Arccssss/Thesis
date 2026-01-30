@@ -29,7 +29,7 @@ GRACE_PERIOD = 0.3
 GATE_ACTION_TIME = 3000 
 ABSENCE_RESET_TIME = 2.5 
 
-SAFETY_DISTANCE_CM = 100 
+SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
 SENSOR_POLL_RATE = 100    
 
@@ -62,7 +62,7 @@ try:
     
     # --- CAMERA CONFIGURATION ---
     picam2 = Picamera2()
-    config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (1920, 1080)})
+    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1920, 1080)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
     picam2.start()
