@@ -235,13 +235,13 @@ def trigger_gate_sequence():
     if is_gate_busy and system_state == "POST-ENTRY SCAN":
         set_status("NEXT VEHICLE DETECTED", "green")
         
-        # --- ADDED: 2 Quick Beeps for successive cars ---
+        # --- 2 Quick Beeps for successive cars ---
         for _ in range(2):
             buzzer.on()
             time.sleep(0.1)
             buzzer.off()
             time.sleep(0.1)
-        # ------------------------------------------------
+        # -----------------------------------------
 
         # Reset logic to treat this as a new entry
         vehicle_confirmed = False
@@ -257,7 +257,7 @@ def trigger_gate_sequence():
     is_gate_busy = True
     set_status("AUTHORIZED: OPENING", "green")
     
-    # --- ADDED: 2 Blinks and Beeps for Authorized Entry ---
+    # --- 2 Blinks and Beeps for Authorized Entry ---
     for _ in range(2):
         led_open.on()
         buzzer.on()
@@ -265,7 +265,7 @@ def trigger_gate_sequence():
         led_open.off()
         buzzer.off()
         time.sleep(0.1)
-    # ------------------------------------------------------
+    # -----------------------------------------------
 
     gate_p1.on(); gate_p2.off(); led_open.on(); led_close.off()
     
@@ -296,7 +296,7 @@ def smart_gate_check():
                 else:
                     vehicle_entry_start_time = None
             
-            # PHASE 2: Vehicle has left (Logic Changed Here)
+            # PHASE 2: Vehicle has left
             elif vehicle_confirmed and dist_cm > SAFETY_DISTANCE_CM:
                 # Instead of closing, we start the wait sequence
                 start_post_entry_wait()
@@ -380,6 +380,28 @@ def update_frame():
                             t_ocr = time.perf_counter()
                             ocr_res = reader.readtext(preprocess_plate(p_crop), detail=0)
                             clean_text = "".join([c for c in "".join(ocr_res).upper() if c.isalnum()])
+                            
+                            # --- SCRIPT: Reformat 1234ABC -> ABC1234 (Manual Logic) ---
+                            # Check if valid text that starts with digit AND ends with letter
+                            if len(clean_text) > 0 and clean_text[0].isdigit() and clean_text[-1].isalpha():
+                                # Find split point: where digits stop and letters begin
+                                split_idx = -1
+                                for i, char in enumerate(clean_text):
+                                    if char.isalpha():
+                                        split_idx = i
+                                        break
+                                
+                                # If we found a split and the parts are clean blocks
+                                if split_idx > 0:
+                                    part_digits = clean_text[:split_idx]
+                                    part_letters = clean_text[split_idx:]
+                                    
+                                    # Double check purity: part_digits is all numbers, part_letters is all letters
+                                    if part_digits.isdigit() and part_letters.isalpha():
+                                        clean_text = f"{part_letters}{part_digits}"
+                                        print(f"[FIX] Reordered Plate: {part_digits}{part_letters} -> {clean_text}")
+                            # -----------------------------------------------------------
+
                             t_ocr_ms = (time.perf_counter() - t_ocr) * 1000
                             if len(clean_text) > 3: 
                                 if clean_text not in first_sight_times: first_sight_times[clean_text] = current_time
