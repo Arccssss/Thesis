@@ -105,6 +105,38 @@ reader = easyocr.Reader(['en'], gpu=False)
 model = YOLO('./best_ncnn_model') 
 
 # ==========================================
+#           CORE FUNCTIONS
+# ==========================================
+
+def load_history_data():
+    """Reads the CSV file and populates the tree_history widget."""
+    for i in tree_history.get_children(): tree_history.delete(i)
+    if not os.path.isfile(LOG_FILE): return
+    try:
+        with open(LOG_FILE, 'r') as f:
+            reader_csv = csv.DictReader(f)
+            # Reversing list so newest logs are at the top
+            for row in reversed(list(reader_csv)):
+                ts = row.get('Timestamp', '')
+                try: 
+                    short_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
+                except: 
+                    short_ts = ts
+                tag = "authorized" if "AUTHORIZED" in row.get('Status', '') else "unauthorized"
+                tree_history.insert("", "end", values=(short_ts, row.get('Plate'), row.get('Name'), row.get('Status'), row.get('Latency') + "s"), tags=(tag,))
+    except Exception as e:
+        print(f"History Load Error: {e}")
+
+def set_status(status_text, color="white"):
+    global system_state
+    system_state = status_text
+    lbl_status.config(text=status_text, fg=color)
+
+def authorized_feedback():
+    buzzer.beep(on_time=0.1, off_time=0.05, n=2)
+    led_open.blink(on_time=0.2, off_time=0.2, n=5)
+
+# ==========================================
 #           GUI SETUP
 # ==========================================
 root = tk.Tk()
@@ -122,7 +154,6 @@ notebook.add(tab_camera, text=" LIVE CAMERA ")
 notebook.add(tab_logs, text=" CURRENT SESSION ")
 notebook.add(tab_history, text=" PAST HISTORY ")
 
-# UI Layout Fix: Fixed container for video to prevent overlapping buttons
 video_frame_container = tk.Frame(tab_camera, bg="black")
 video_frame_container.pack(fill="both", expand=True, padx=5, pady=5)
 video_label = tk.Label(video_frame_container, bg="black")
@@ -140,7 +171,7 @@ btn_manual_reset.pack(side="left", padx=10)
 lbl_dist_gui = tk.Label(control_frame, text="DIST: -- cm", font=("Arial", 12), bg="#333", fg="cyan")
 lbl_dist_gui.pack(side="right", padx=10)
 
-# Treeviews
+# Session Logs Tab
 cols = ("time", "plate", "owner", "status", "latency")
 tree = ttk.Treeview(tab_logs, columns=cols, show="headings")
 for c in cols: tree.heading(c, text=c.capitalize()); tree.column(c, width=100, anchor="center")
@@ -148,24 +179,20 @@ tree.pack(fill="both", expand=True)
 tree.tag_configure("authorized", foreground="green")
 tree.tag_configure("unauthorized", foreground="red")
 
+# History Tab
 tree_history = ttk.Treeview(tab_history, columns=cols, show="headings")
 for c in cols: tree_history.heading(c, text=c.capitalize()); tree_history.column(c, width=100, anchor="center")
 tree_history.pack(fill="both", expand=True)
 tree_history.tag_configure("authorized", foreground="green")
 tree_history.tag_configure("unauthorized", foreground="red")
 
-# ==========================================
-#           CORE LOGIC
-# ==========================================
+# Manual Refresh Button in History Tab
+btn_refresh_hist = tk.Button(tab_history, text="Refresh History From File", command=load_history_data)
+btn_refresh_hist.pack(fill="x")
 
-def set_status(status_text, color="white"):
-    global system_state
-    system_state = status_text
-    lbl_status.config(text=status_text, fg=color)
-
-def authorized_feedback():
-    buzzer.beep(on_time=0.1, off_time=0.05, n=2)
-    led_open.blink(on_time=0.2, off_time=0.2, n=5)
+# ==========================================
+#           CONTINUED CORE LOGIC
+# ==========================================
 
 def log_to_gui_and_csv(plate, name, faculty, status, latency):
     ts_l, ts_s = datetime.now().strftime("%Y-%m-%d %H:%M:%S"), datetime.now().strftime("%H:%M:%S")
@@ -176,6 +203,9 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency):
         if os.path.getsize(LOG_FILE) == 0: writer.writerow(["Plate","Name","Faculty","Status","Timestamp","Latency"])
         writer.writerow([plate, name, faculty, status, ts_l, f"{latency:.4f}"])
     
+    # Auto-update history tab
+    load_history_data()
+
     if status == "AUTHORIZED":
         threading.Thread(target=authorized_feedback, daemon=True).start()
         trigger_gate_sequence()
@@ -243,12 +273,11 @@ def update_frame():
     h, w, _ = frame.shape
     curr_t = time.time()
 
-    # Overlay
+    # On-screen ultrasonic CM display
     cv2.putText(frame, f"STATUS: {system_state}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     d_clr = (0, 0, 255) if current_dist_global < SAFETY_DISTANCE_CM else (0, 255, 0)
     cv2.putText(frame, f"SENSOR: {current_dist_global:.1f} cm", (30, 95), cv2.FONT_HERSHEY_SIMPLEX, 1, d_clr, 2)
 
-    # State text
     is_waiting_for_car = is_gate_busy and not vehicle_confirmed
     is_in_delay = scan_resume_time > 0 and curr_t < scan_resume_time
     if is_in_delay: cv2.putText(frame, "READYING NEXT SCAN...", (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 128, 0), 2)
@@ -257,13 +286,13 @@ def update_frame():
         rem = max(0, GATE_CLOSE_GRACE_TIMEOUT - (curr_t - plate_absence_start_time))
         cv2.putText(frame, f"CLOSING IN: {rem:.1f}s", (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 2)
 
-    # AI Scanning logic
-    skip_scan = system_state == "CLOSING GATE" or is_waiting_for_car or is_in_delay
+    # ROI Scaling
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
     roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
     cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), (0, 255, 0), 2)
 
-    if not skip_scan:
+    # Logic to only scan when not busy with confirmation or delay
+    if not (system_state == "CLOSING GATE" or is_waiting_for_car or is_in_delay):
         roi = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
         results = model(roi, verbose=False, conf=0.4)
         det = False
@@ -295,29 +324,26 @@ def update_frame():
         if not det and detection_start_time and (curr_t - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear(); first_sight_times.clear()
 
-    # ASPECT RATIO FIX: Scale image to fit container while keeping ratio
+    # Aspect Ratio Scaler
     try:
-        container_w = video_frame_container.winfo_width()
-        container_h = video_frame_container.winfo_height()
-        if container_w > 100 and container_h > 100:
-            # Calculate ratio-aware size
-            frame_aspect = w / h
-            # Fit to height usually works best to keep buttons visible
-            new_h = container_h
-            new_w = int(new_h * frame_aspect)
-            
-            # If width overflows, fit to width instead
-            if new_w > container_w:
-                new_w = container_w
-                new_h = int(new_w / frame_aspect)
-                
+        cw, ch = video_frame_container.winfo_width(), video_frame_container.winfo_height()
+        if cw > 100 and ch > 100:
+            aspect = w / h
+            new_h = ch
+            new_w = int(new_h * aspect)
+            if new_w > cw:
+                new_w = cw
+                new_h = int(new_w / aspect)
             img = Image.fromarray(cv2.resize(frame, (new_w, new_h)))
             imgtk = ImageTk.PhotoImage(image=img)
             video_label.imgtk = imgtk; video_label.configure(image=imgtk)
     except: pass
     root.after(10, update_frame)
 
-load_history_data()
+# ==========================================
+#           INITIALIZATION & BOOT
+# ==========================================
+load_history_data() # INITIALIZED HERE
 root.after(500, smart_gate_check)
 root.after(500, update_frame)
 root.mainloop()
