@@ -62,7 +62,7 @@ try:
     led_close.on()
     
     picam2 = Picamera2()
-    config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (1920, 1080)})
+    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1920, 1080)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
     picam2.start()
