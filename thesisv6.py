@@ -13,6 +13,7 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED 
 from picamera2 import Picamera2
+import threading
 
 # ==========================================
 #           CONFIGURATION
@@ -29,9 +30,8 @@ GRACE_PERIOD = 0.3
 GATE_ACTION_TIME = 3000 
 ABSENCE_RESET_TIME = 2.5 
 
-# Logic for your request
 GATE_CLOSE_GRACE_TIMEOUT = 5.0  
-POST_ENTRY_SCAN_DELAY = 0.5     # 0.5s pause after car clears sensor
+POST_ENTRY_SCAN_DELAY = 0.5     
 
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
@@ -71,6 +71,7 @@ except Exception as e:
     class DummyDev: 
         def on(self): pass
         def off(self): pass
+        def blink(self, on_time=0.1, off_time=0.1, n=1): pass
         def beep(self, on_time=0.1, off_time=0.1, n=1): pass
         def close(self): pass
         @property
@@ -95,6 +96,7 @@ vehicle_entry_start_time = None
 vehicle_confirmed = False
 plate_absence_start_time = None 
 scan_resume_time = 0 
+current_dist_global = 0.0
 
 try:
     auth_df = pd.read_csv(AUTH_FILE, dtype=str)
@@ -112,7 +114,7 @@ model = YOLO('./best_ncnn_model')
 # ==========================================
 root = tk.Tk()
 root.title("RPi 5 Smart Access Control")
-root.geometry("800x550") 
+root.geometry("800x600") 
 
 notebook = ttk.Notebook(root)
 notebook.pack(fill='both', expand=True)
@@ -130,12 +132,19 @@ video_frame_container.pack(fill="both", expand=True)
 video_label = tk.Label(video_frame_container, bg="black")
 video_label.pack(expand=True)
 
-status_frame = tk.Frame(tab_camera, bg="#333")
-status_frame.pack(fill="x", side="bottom")
-lbl_status = tk.Label(status_frame, text="SCANNING", font=("Arial", 12, "bold"), bg="#333", fg="white", width=30)
-lbl_status.pack(side="left", padx=10, pady=5)
-lbl_dist = tk.Label(status_frame, text="DIST: -- cm", font=("Arial", 12), bg="#333", fg="cyan")
-lbl_dist.pack(side="right", padx=10, pady=5)
+# CONTROL PANEL FOR BUTTONS
+control_frame = tk.Frame(tab_camera, bg="#333")
+control_frame.pack(fill="x", side="bottom")
+
+lbl_status = tk.Label(control_frame, text="SCANNING", font=("Arial", 12, "bold"), bg="#333", fg="white", width=20)
+lbl_status.pack(side="left", padx=10, pady=10)
+
+# THE NEW RESET BUTTON
+btn_manual_reset = tk.Button(control_frame, text="RESET SYSTEM", bg="red", fg="white", font=("Arial", 10, "bold"), command=lambda: execute_close_action())
+btn_manual_reset.pack(side="left", padx=10)
+
+lbl_dist = tk.Label(control_frame, text="DIST: -- cm", font=("Arial", 12), bg="#333", fg="cyan")
+lbl_dist.pack(side="right", padx=10)
 
 cols_current = ("time", "plate", "owner", "status", "latency")
 tree = ttk.Treeview(tab_logs, columns=cols_current, show="headings", height=12)
@@ -180,6 +189,10 @@ def load_history_data():
                 tree_history.insert("", "end", values=(short_ts, row.get('Plate'), row.get('Name'), row.get('Status'), row.get('Latency') + "s"), tags=(tag,))
     except: pass
 
+def authorized_feedback():
+    buzzer.beep(on_time=0.1, off_time=0.05, n=2)
+    led_open.blink(on_time=0.2, off_time=0.2, n=5)
+
 def log_to_gui_and_csv(plate, name, faculty, status, latency):
     ts_l = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ts_s = datetime.now().strftime("%H:%M:%S")
@@ -192,7 +205,10 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency):
                 writer.writerow(["Plate","Name","Faculty","Status","Timestamp","Latency"])
             writer.writerow([plate, name, faculty, status, ts_l, f"{latency:.4f}"])
         load_history_data()
-        if status == "AUTHORIZED": trigger_gate_sequence()
+        
+        if status == "AUTHORIZED":
+            threading.Thread(target=authorized_feedback).start()
+            trigger_gate_sequence()
         else:
             set_status("UNAUTHORIZED DETECTED", "red")
             buzzer.beep(on_time=0.1, off_time=0.05, n=4)
@@ -229,9 +245,10 @@ def trigger_gate_sequence():
     gate_p1.on(); gate_p2.off(); led_open.on(); led_close.off()
 
 def smart_gate_check():
-    global vehicle_entry_start_time, vehicle_confirmed, system_state, plate_absence_start_time, last_plate_seen_time, scan_resume_time
+    global vehicle_entry_start_time, vehicle_confirmed, system_state, plate_absence_start_time, last_plate_seen_time, scan_resume_time, current_dist_global
     try:
         dist_cm = sensor.distance * 100
+        current_dist_global = dist_cm
         if dist_cm >= 148: lbl_dist.config(text="DIST: > 150 cm", fg="white")
         else: lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
@@ -245,17 +262,12 @@ def smart_gate_check():
             
             elif dist_cm > SAFETY_DISTANCE_CM:
                 curr_t = time.time()
-                
-                # Start 0.5s scan delay after car clears sensor
                 if scan_resume_time == 0:
                     scan_resume_time = curr_t + POST_ENTRY_SCAN_DELAY
                 
                 if curr_t >= scan_resume_time:
-                    # After resume, check for plate absence
                     if (curr_t - last_plate_seen_time) > 1.2:
-                        if plate_absence_start_time is None: 
-                            plate_absence_start_time = curr_t
-                        
+                        if plate_absence_start_time is None: plate_absence_start_time = curr_t
                         if (curr_t - plate_absence_start_time) >= GATE_CLOSE_GRACE_TIMEOUT:
                             execute_close_action()
                             return
@@ -282,23 +294,22 @@ def update_frame():
     cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), (0, 255, 0), 2)
     roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
 
-    cv2.putText(frame, f"STATUS: {system_state}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+    cv2.putText(frame, f"STATUS: {system_state}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    dist_color = (0, 0, 255) if current_dist_global < SAFETY_DISTANCE_CM else (0, 255, 0)
+    cv2.putText(frame, f"SENSOR: {current_dist_global:.1f} cm", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, dist_color, 2)
     
     curr_t = time.time()
-    # Visual Overlay for your specific flow
     if scan_resume_time > 0 and curr_t < scan_resume_time:
-        cv2.putText(frame, "READYING NEXT SCAN...", (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+        cv2.putText(frame, "READYING NEXT SCAN...", (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 100, 0), 2)
     elif plate_absence_start_time and is_gate_busy:
         rem = max(0, GATE_CLOSE_GRACE_TIMEOUT - (curr_t - plate_absence_start_time))
-        cv2.putText(frame, f"GRACE: {rem:.1f}s", (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 2)
+        cv2.putText(frame, f"GRACE: {rem:.1f}s", (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 2)
 
-    # Allow scanning only if we aren't in the 0.5s post-entry pause
     skip_scan = (scan_resume_time > 0 and curr_t < scan_resume_time) or system_state == "CLOSING GATE"
 
     if not skip_scan:
         results = model(roi_crop, verbose=False, conf=0.4)
         detected_box = False
-
         for result in results:
             boxes = result.boxes.xyxy.cpu().numpy()
             if len(boxes) > 0:
@@ -337,9 +348,6 @@ def update_frame():
         video_label.imgtk = imgtk; video_label.configure(image=imgtk)
     root.after(10, update_frame)
 
-# ==========================================
-#           START SYSTEM
-# ==========================================
 btn_refresh = tk.Button(tab_history, text="Refresh Logs", command=load_history_data)
 btn_refresh.pack(side="bottom", fill="x", pady=5)
 
