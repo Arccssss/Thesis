@@ -132,14 +132,12 @@ video_frame_container.pack(fill="both", expand=True)
 video_label = tk.Label(video_frame_container, bg="black")
 video_label.pack(expand=True)
 
-# CONTROL PANEL FOR BUTTONS
 control_frame = tk.Frame(tab_camera, bg="#333")
 control_frame.pack(fill="x", side="bottom")
 
 lbl_status = tk.Label(control_frame, text="SCANNING", font=("Arial", 12, "bold"), bg="#333", fg="white", width=20)
 lbl_status.pack(side="left", padx=10, pady=10)
 
-# THE NEW RESET BUTTON
 btn_manual_reset = tk.Button(control_frame, text="RESET SYSTEM", bg="red", fg="white", font=("Arial", 10, "bold"), command=lambda: execute_close_action())
 btn_manual_reset.pack(side="left", padx=10)
 
@@ -253,19 +251,26 @@ def smart_gate_check():
         else: lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
         if is_gate_busy and system_state != "CLOSING GATE":
+            # 1. Car confirmation phase
             if not vehicle_confirmed:
                 if dist_cm < SAFETY_DISTANCE_CM:
                     if vehicle_entry_start_time is None: vehicle_entry_start_time = time.time()
                     if (time.time() - vehicle_entry_start_time) >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
+                        print("🚗 Vehicle confirmed. Scanning disabled until cleared.")
                 else: vehicle_entry_start_time = None
             
+            # 2. Car clear sensor phase
             elif dist_cm > SAFETY_DISTANCE_CM:
                 curr_t = time.time()
+                
+                # Start the 0.5s Grace Period once car clears
                 if scan_resume_time == 0:
                     scan_resume_time = curr_t + POST_ENTRY_SCAN_DELAY
                 
+                # Resuming scanning phase
                 if curr_t >= scan_resume_time:
+                    # After resume, if no plate seen for 5 seconds, close
                     if (curr_t - last_plate_seen_time) > 1.2:
                         if plate_absence_start_time is None: plate_absence_start_time = curr_t
                         if (curr_t - plate_absence_start_time) >= GATE_CLOSE_GRACE_TIMEOUT:
@@ -299,13 +304,25 @@ def update_frame():
     cv2.putText(frame, f"SENSOR: {current_dist_global:.1f} cm", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, dist_color, 2)
     
     curr_t = time.time()
-    if scan_resume_time > 0 and curr_t < scan_resume_time:
+
+    # --- UPDATED SCANNING LOGIC ---
+    # We skip AI scanning if:
+    # 1. Gate is physically closing
+    # 2. Gate is open AND car hasn't cleared the sensor yet (confirmation phase)
+    # 3. We are in the 0.5s "Readying" delay
+    
+    is_waiting_for_car = is_gate_busy and not vehicle_confirmed
+    is_in_entry_pause = scan_resume_time > 0 and curr_t < scan_resume_time
+    
+    skip_scan = system_state == "CLOSING GATE" or is_waiting_for_car or is_in_entry_pause
+
+    if is_in_entry_pause:
         cv2.putText(frame, "READYING NEXT SCAN...", (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 100, 0), 2)
+    elif is_waiting_for_car:
+        cv2.putText(frame, "GATE OPEN: AWAITING PASSAGE", (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
     elif plate_absence_start_time and is_gate_busy:
         rem = max(0, GATE_CLOSE_GRACE_TIMEOUT - (curr_t - plate_absence_start_time))
         cv2.putText(frame, f"GRACE: {rem:.1f}s", (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 2)
-
-    skip_scan = (scan_resume_time > 0 and curr_t < scan_resume_time) or system_state == "CLOSING GATE"
 
     if not skip_scan:
         results = model(roi_crop, verbose=False, conf=0.4)
