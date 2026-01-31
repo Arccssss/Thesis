@@ -1,5 +1,5 @@
 import cv2
-from paddleocr import PaddleOCR 
+import easyocr
 import numpy as np
 from ultralytics import YOLO
 import time
@@ -15,7 +15,7 @@ from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED
 from picamera2 import Picamera2
 
 # ==========================================
-#          CONFIGURATION
+#           CONFIGURATION
 # ==========================================
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
@@ -28,6 +28,10 @@ ROI_COLOR = (0, 255, 0)
 GRACE_PERIOD = 0.3      
 GATE_ACTION_TIME = 3000 
 ABSENCE_RESET_TIME = 2.5 
+
+# Logic for your request
+GATE_CLOSE_GRACE_TIMEOUT = 5.0  
+POST_ENTRY_SCAN_DELAY = 0.5     # 0.5s pause after car clears sensor
 
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
@@ -43,7 +47,7 @@ LED_OPEN_PIN = 5
 LED_CLOSE_PIN = 6  
 
 # ==========================================
-#          HARDWARE INITIALIZATION
+#           HARDWARE INITIALIZATION
 # ==========================================
 try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
@@ -56,8 +60,7 @@ try:
     led_close.on()
     
     picam2 = Picamera2()
-    # Fixed format to BGR888 for OpenCV/PaddleOCR compatibility
-    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1920, 1080)})
+    config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (1920, 1080)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
     picam2.start()
@@ -79,13 +82,33 @@ except Exception as e:
     picam2 = None 
 
 # ==========================================
-#          OCR & MODEL INITIALIZATION
+#           LOGIC & HELPERS
 # ==========================================
-reader = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
+logged_vehicles = {} 
+scan_buffer = deque(maxlen=SCAN_BUFFER_LEN)
+first_sight_times = {} 
+detection_start_time = None
+last_plate_seen_time = 0 
+is_gate_busy = False
+system_state = "SCANNING" 
+vehicle_entry_start_time = None 
+vehicle_confirmed = False
+plate_absence_start_time = None 
+scan_resume_time = 0 
+
+try:
+    auth_df = pd.read_csv(AUTH_FILE, dtype=str)
+    auth_df['Plate'] = auth_df['Plate'].str.strip().str.upper()
+    authorized_plates = auth_df['Plate'].tolist()
+except: 
+    authorized_plates = []
+    auth_df = pd.DataFrame(columns=["Plate", "Name", "Faculty"])
+
+reader = easyocr.Reader(['en'], gpu=False) 
 model = YOLO('./best_ncnn_model') 
 
 # ==========================================
-#          GUI SETUP (Tkinter)
+#           GUI SETUP
 # ==========================================
 root = tk.Tk()
 root.title("RPi 5 Smart Access Control")
@@ -113,8 +136,6 @@ lbl_status = tk.Label(status_frame, text="SCANNING", font=("Arial", 12, "bold"),
 lbl_status.pack(side="left", padx=10, pady=5)
 lbl_dist = tk.Label(status_frame, text="DIST: -- cm", font=("Arial", 12), bg="#333", fg="cyan")
 lbl_dist.pack(side="right", padx=10, pady=5)
-lbl_debug = tk.Label(status_frame, text="Last Read: None", font=("Arial", 10), bg="#333", fg="yellow")
-lbl_debug.pack(side="right", padx=10)
 
 cols_current = ("time", "plate", "owner", "status", "latency")
 tree = ttk.Treeview(tab_logs, columns=cols_current, show="headings", height=12)
@@ -137,25 +158,8 @@ tree_history.tag_configure("authorized", foreground="green")
 tree_history.tag_configure("unauthorized", foreground="red")
 
 # ==========================================
-#          LOGIC & HELPERS
+#           CORE FUNCTIONS
 # ==========================================
-logged_vehicles = {} 
-scan_buffer = deque(maxlen=SCAN_BUFFER_LEN)
-first_sight_times = {} 
-detection_start_time = None
-last_plate_seen_time = 0 
-is_gate_busy = False
-system_state = "SCANNING" 
-vehicle_entry_start_time = None 
-vehicle_confirmed = False
-
-try:
-    auth_df = pd.read_csv(AUTH_FILE, dtype=str)
-    auth_df['Plate'] = auth_df['Plate'].str.strip().str.upper()
-    authorized_plates = auth_df['Plate'].tolist()
-except: 
-    authorized_plates = []
-    auth_df = pd.DataFrame(columns=["Plate", "Name", "Faculty"])
 
 def set_status(status_text, color="white"):
     global system_state
@@ -196,16 +200,17 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency):
     except: pass
 
 def preprocess_plate(img):
-    # Fixed: PaddleOCR needs BGR. Grayscale helps accuracy.
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+    return thresh
 
 def reset_gate_system():
-    global is_gate_busy, vehicle_entry_start_time, vehicle_confirmed
+    global is_gate_busy, vehicle_entry_start_time, vehicle_confirmed, plate_absence_start_time, scan_resume_time
     gate_p1.off(); gate_p2.on(); led_open.off(); led_close.on()
     is_gate_busy = vehicle_confirmed = False
     vehicle_entry_start_time = None
+    plate_absence_start_time = None
+    scan_resume_time = 0
     set_status("SCANNING", "white")
 
 def execute_close_action():
@@ -214,25 +219,21 @@ def execute_close_action():
     root.after(GATE_ACTION_TIME, reset_gate_system)
 
 def trigger_gate_sequence():
-    global is_gate_busy
+    global is_gate_busy, vehicle_confirmed, plate_absence_start_time, scan_resume_time
     if is_gate_busy: return 
     is_gate_busy = True
+    vehicle_confirmed = False
+    plate_absence_start_time = None
+    scan_resume_time = 0
     set_status("OPENING GATE", "green")
     gate_p1.on(); gate_p2.off(); led_open.on(); led_close.off()
-    root.after(GATE_ACTION_TIME, lambda: root.after(100, smart_gate_check))
 
 def smart_gate_check():
-    global vehicle_entry_start_time, vehicle_confirmed, system_state
+    global vehicle_entry_start_time, vehicle_confirmed, system_state, plate_absence_start_time, last_plate_seen_time, scan_resume_time
     try:
         dist_cm = sensor.distance * 100
-        if dist_cm >= 148:
-            lbl_dist.config(text="DIST: > 150 cm", fg="white")
-        else:
-            lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
-
-        if dist_cm < SAFETY_DISTANCE_CM:
-            if not is_gate_busy and system_state != "UNAUTHORIZED DETECTED":
-                set_status("DETECTING CAR", "yellow")
+        if dist_cm >= 148: lbl_dist.config(text="DIST: > 150 cm", fg="white")
+        else: lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
         if is_gate_busy and system_state != "CLOSING GATE":
             if not vehicle_confirmed:
@@ -241,12 +242,33 @@ def smart_gate_check():
                     if (time.time() - vehicle_entry_start_time) >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
                 else: vehicle_entry_start_time = None
+            
             elif dist_cm > SAFETY_DISTANCE_CM:
-                execute_close_action(); return 
-        elif not is_gate_busy and dist_cm > SAFETY_DISTANCE_CM:
-             if system_state == "DETECTING CAR": set_status("SCANNING", "white")
+                curr_t = time.time()
+                
+                # Start 0.5s scan delay after car clears sensor
+                if scan_resume_time == 0:
+                    scan_resume_time = curr_t + POST_ENTRY_SCAN_DELAY
+                
+                if curr_t >= scan_resume_time:
+                    # After resume, check for plate absence
+                    if (curr_t - last_plate_seen_time) > 1.2:
+                        if plate_absence_start_time is None: 
+                            plate_absence_start_time = curr_t
+                        
+                        if (curr_t - plate_absence_start_time) >= GATE_CLOSE_GRACE_TIMEOUT:
+                            execute_close_action()
+                            return
+                    else:
+                        plate_absence_start_time = None 
+
+        elif not is_gate_busy:
+            if dist_cm < SAFETY_DISTANCE_CM and system_state != "UNAUTHORIZED DETECTED":
+                set_status("DETECTING CAR", "yellow")
+            elif dist_cm > SAFETY_DISTANCE_CM and system_state == "DETECTING CAR":
+                set_status("SCANNING", "white")
     except: pass
-    root.after(SENSOR_POLL_RATE if (is_gate_busy or system_state == "DETECTING CAR") else 200, smart_gate_check)
+    root.after(SENSOR_POLL_RATE, smart_gate_check)
 
 def update_frame():
     global detection_start_time, last_plate_seen_time
@@ -254,84 +276,81 @@ def update_frame():
         frame = picam2.capture_array() if picam2 else np.zeros((540, 960, 3), dtype=np.uint8)
     except: root.after(100, update_frame); return
 
-    current_dist = sensor.distance * 100
-    cv2.putText(frame, f"STATUS: {system_state}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
-    cv2.putText(frame, f"DIST: {current_dist:.1f} cm", (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
-
     h, w, _ = frame.shape
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
     roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
-    cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), (0, 255, 0), 3) 
+    cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), (0, 255, 0), 2)
     roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
 
-    if not is_gate_busy and system_state in ["SCANNING", "DETECTING CAR", "UNAUTHORIZED DETECTED"]:
-        t0 = time.perf_counter()
-        results = model(roi_crop, verbose=False, conf=0.4) 
-        t_detect = (time.perf_counter() - t0) * 1000
-        detected_box = False; current_time = time.time()
+    cv2.putText(frame, f"STATUS: {system_state}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+    
+    curr_t = time.time()
+    # Visual Overlay for your specific flow
+    if scan_resume_time > 0 and curr_t < scan_resume_time:
+        cv2.putText(frame, "READYING NEXT SCAN...", (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+    elif plate_absence_start_time and is_gate_busy:
+        rem = max(0, GATE_CLOSE_GRACE_TIMEOUT - (curr_t - plate_absence_start_time))
+        cv2.putText(frame, f"GRACE: {rem:.1f}s", (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 2)
+
+    # Allow scanning only if we aren't in the 0.5s post-entry pause
+    skip_scan = (scan_resume_time > 0 and curr_t < scan_resume_time) or system_state == "CLOSING GATE"
+
+    if not skip_scan:
+        results = model(roi_crop, verbose=False, conf=0.4)
+        detected_box = False
 
         for result in results:
             boxes = result.boxes.xyxy.cpu().numpy()
             if len(boxes) > 0:
-                detected_box = True; last_plate_seen_time = current_time 
-                if detection_start_time is None: detection_start_time = current_time
+                detected_box = True
+                last_plate_seen_time = curr_t
+                if detection_start_time is None: detection_start_time = curr_t
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box)
                     cv2.rectangle(frame, (x1+roi_x, y1+roi_y), (x2+roi_x, y2+roi_y), (0, 255, 0), 3)
-                    if (current_time - detection_start_time) > GRACE_PERIOD:
+                    if (curr_t - detection_start_time) > GRACE_PERIOD:
                         p_crop = roi_crop[y1:y2, x1:x2]
                         if p_crop.size > 0:
-                            t_ocr = time.perf_counter()
-                            
-                            # Fixed OCR logic with safe attribute checking
-                            processed_p = preprocess_plate(p_crop)
-                            ocr_res = reader.ocr(processed_p, cls=False)
-                            
-                            clean_text = ""
-                            if ocr_res and isinstance(ocr_res, list) and ocr_res[0] is not None:
-                                for line in ocr_res[0]:
-                                    text_val = line[1][0]
-                                    clean_text += "".join([c for c in str(text_val).upper() if c.isalnum()])
-                            
-                            t_ocr_ms = (time.perf_counter() - t_ocr) * 1000
-                            
-                            if len(clean_text) > 3: 
-                                if clean_text not in first_sight_times: first_sight_times[clean_text] = current_time
+                            ocr_res = reader.readtext(preprocess_plate(p_crop), detail=0)
+                            clean_text = "".join([c for c in "".join(ocr_res).upper() if c.isalnum()])
+                            if len(clean_text) > 3:
+                                if clean_text not in first_sight_times: first_sight_times[clean_text] = curr_t
                                 scan_buffer.append(clean_text)
                                 most_common, freq = Counter(scan_buffer).most_common(1)[0]
-                                if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
-                                    latency = current_time - first_sight_times.get(most_common, current_time)
+                                if (curr_t - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
+                                    latency = curr_t - first_sight_times.get(most_common, curr_t)
                                     if most_common in authorized_plates:
                                         row = auth_df[auth_df['Plate'] == most_common].iloc[0]
                                         log_to_gui_and_csv(most_common, row['Name'], row['Faculty'], "AUTHORIZED", latency)
                                     elif freq >= CONFIDENCE_THRESHOLD:
                                         log_to_gui_and_csv(most_common, "Unknown", "Visitor", "UNAUTHORIZED", latency)
-                                    
-                                    logged_vehicles[most_common] = current_time
-                                    scan_buffer.clear(); first_sight_times.clear()
-                                print(f"[PERF] Plate: {clean_text} | Det: {t_detect:.1f}ms | OCR: {t_ocr_ms:.1f}ms")
+                                    logged_vehicles[most_common] = curr_t
 
-        if not detected_box and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
+        if not detected_box and detection_start_time and (curr_t - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear(); first_sight_times.clear()
 
-    win_w, win_h = video_frame_container.winfo_width(), video_frame_container.winfo_height()
+    win_w = video_frame_container.winfo_width()
     if win_w > 10:
-        new_w = win_w; new_h = int(win_w / (w/h))
-        # Conver BGR (OpenCV) to RGB (PIL) for Tkinter display
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(cv2.resize(frame_rgb, (new_w, new_h)))
+        new_h = int(win_w / (w/h))
+        img = Image.fromarray(cv2.resize(frame, (win_w, new_h)))
         imgtk = ImageTk.PhotoImage(image=img)
         video_label.imgtk = imgtk; video_label.configure(image=imgtk)
     root.after(10, update_frame)
 
+# ==========================================
+#           START SYSTEM
+# ==========================================
 btn_refresh = tk.Button(tab_history, text="Refresh Logs", command=load_history_data)
 btn_refresh.pack(side="bottom", fill="x", pady=5)
 
 load_history_data()
 root.after(500, smart_gate_check)
 root.after(500, update_frame)
-try: root.mainloop()
-except KeyboardInterrupt: pass
+
+try:
+    root.mainloop()
+except KeyboardInterrupt:
+    pass
 finally:
     if picam2: picam2.stop()
     gate_p1.close(); gate_p2.on()
