@@ -141,6 +141,9 @@ create_header(page_camera, "SAVES AI", None,
 
 video_frame_container = tk.Frame(page_camera, bg="#ff4d4d", padx=5, pady=5)
 video_frame_container.pack(fill="both", expand=True, padx=40, pady=10)
+# [FIX 1] Prevent the frame from resizing based on content
+video_frame_container.pack_propagate(False)
+
 video_label = tk.Label(video_frame_container, bg="black")
 video_label.pack(fill="both", expand=True)
 
@@ -221,10 +224,8 @@ def load_history_data():
                 try: short_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
                 except: short_ts = ts
                 
-                # UPDATED: Read from 2 separate columns 'Det' and 'Ocr'
                 det = row.get('Det', '0')
                 ocr = row.get('Ocr', '0')
-                # Combine them for the GUI display
                 perf_display = f"Det: {float(det):.0f}ms | OCR: {float(ocr):.0f}ms"
                 
                 tag = "authorized" if "AUTHORIZED" in row.get('Status', '') else "unauthorized"
@@ -235,20 +236,16 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
     ts_l = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ts_s = datetime.now().strftime("%H:%M:%S")
     
-    # Create the combined string for the GUI (matches your reference image)
     perf_display = f"Det: {det_time:.0f}ms | OCR: {ocr_time:.0f}ms"
     
     try:
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
-        # Insert into Current Session Tree
         tree.insert("", 0, values=(ts_s, plate, name, status, f"{latency:.2f}s", perf_display), tags=(tag,))
         
-        # Save to CSV using the 2 separate columns
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
         with open(LOG_FILE, 'a', newline='') as f:
             writer = csv.writer(f)
             if not file_exists: 
-                # UPDATED HEADER: Det and Ocr separate
                 writer.writerow(["Plate","Name","Faculty","Status","Timestamp","Latency","Det","Ocr"])
             writer.writerow([plate, name, faculty, status, ts_l, f"{latency:.4f}", f"{det_time:.2f}", f"{ocr_time:.2f}"])
         
@@ -392,7 +389,6 @@ def update_frame():
                             ocr_res = reader.readtext(preprocess_plate(p_crop), detail=0)
                             clean_text = "".join([c for c in "".join(ocr_res).upper() if c.isalnum()])
                             
-                            # Correction: 123ABC -> ABC123
                             if len(clean_text) > 0 and clean_text[0].isdigit() and clean_text[-1].isalpha():
                                 split_idx = -1
                                 for i, char in enumerate(clean_text):
@@ -411,7 +407,6 @@ def update_frame():
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
                                     latency = current_time - first_sight_times.get(most_common, current_time)
                                     
-                                    # Pass the raw values to the logging function
                                     if most_common in authorized_plates:
                                         row = auth_df[auth_df['Plate'] == most_common].iloc[0]
                                         log_to_gui_and_csv(most_common, row['Name'], row['Faculty'], "AUTHORIZED", latency, t_detect, t_ocr_ms)
@@ -424,12 +419,19 @@ def update_frame():
         if not detected_box and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear(); first_sight_times.clear()
 
-    win_w, win_h = video_frame_container.winfo_width(), video_frame_container.winfo_height()
-    if win_w > 10:
-        new_w = win_w; new_h = int(win_w / (w/h))
+    # [FIX 2] Updated resizing logic to use Aspect Fit
+    win_w = video_frame_container.winfo_width()
+    win_h = video_frame_container.winfo_height()
+    
+    if win_w > 10 and win_h > 10:
+        scale = min(win_w / w, win_h / h)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        
         img = Image.fromarray(cv2.resize(frame, (new_w, new_h)))
         imgtk = ImageTk.PhotoImage(image=img)
         video_label.imgtk = imgtk; video_label.configure(image=imgtk)
+
     root.after(10, update_frame)
 
 show_frame(page_camera)
