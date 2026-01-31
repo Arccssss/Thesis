@@ -1,5 +1,5 @@
 import cv2
-from paddleocr import PaddleOCR  # Switched from easyocr
+from paddleocr import PaddleOCR 
 import numpy as np
 from ultralytics import YOLO
 import time
@@ -56,7 +56,8 @@ try:
     led_close.on()
     
     picam2 = Picamera2()
-    config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (1920, 1080)})
+    # Fixed format to BGR888 for OpenCV/PaddleOCR compatibility
+    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1920, 1080)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
     picam2.start()
@@ -80,7 +81,6 @@ except Exception as e:
 # ==========================================
 #          OCR & MODEL INITIALIZATION
 # ==========================================
-# Initialize PaddleOCR (use_angle_cls=False saves time, lang='en')
 reader = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
 model = YOLO('./best_ncnn_model') 
 
@@ -196,10 +196,10 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency):
     except: pass
 
 def preprocess_plate(img):
-    # PaddleOCR often handles raw RGB well, but grayscale/thresh can help in low light
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    # Fixed: PaddleOCR needs BGR. Grayscale helps accuracy.
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return cv2.cvtColor(thresh, cv2.COLOR_GRAY2RGB) # Paddle prefers 3-channel
+    return cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
 
 def reset_gate_system():
     global is_gate_busy, vehicle_entry_start_time, vehicle_confirmed
@@ -282,15 +282,16 @@ def update_frame():
                         p_crop = roi_crop[y1:y2, x1:x2]
                         if p_crop.size > 0:
                             t_ocr = time.perf_counter()
-                            # --- PADDLE OCR LOGIC ---
-                            # ocr_res structure: [ [[ [coords], (text, score) ]] ]
-                            ocr_res = reader.ocr(p_crop, cls=False)
+                            
+                            # Fixed OCR logic with safe attribute checking
+                            processed_p = preprocess_plate(p_crop)
+                            ocr_res = reader.ocr(processed_p, cls=False)
                             
                             clean_text = ""
-                            if ocr_res and ocr_res[0]:
+                            if ocr_res and isinstance(ocr_res, list) and ocr_res[0] is not None:
                                 for line in ocr_res[0]:
-                                    text = line[1][0] # Get the text string
-                                    clean_text += "".join([c for c in text.upper() if c.isalnum()])
+                                    text_val = line[1][0]
+                                    clean_text += "".join([c for c in str(text_val).upper() if c.isalnum()])
                             
                             t_ocr_ms = (time.perf_counter() - t_ocr) * 1000
                             
@@ -316,7 +317,9 @@ def update_frame():
     win_w, win_h = video_frame_container.winfo_width(), video_frame_container.winfo_height()
     if win_w > 10:
         new_w = win_w; new_h = int(win_w / (w/h))
-        img = Image.fromarray(cv2.resize(frame, (new_w, new_h)))
+        # Conver BGR (OpenCV) to RGB (PIL) for Tkinter display
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(cv2.resize(frame_rgb, (new_w, new_h)))
         imgtk = ImageTk.PhotoImage(image=img)
         video_label.imgtk = imgtk; video_label.configure(image=imgtk)
     root.after(10, update_frame)
