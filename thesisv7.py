@@ -6,6 +6,7 @@ import time
 import pandas as pd
 import os
 import re
+import sys
 from datetime import datetime
 from collections import Counter, deque
 import csv 
@@ -88,10 +89,9 @@ root = tk.Tk()
 root.title("SAVES AI Control System")
 root.configure(bg="white")
 
-# [FIX] Force Fullscreen to fit ANY screen size automatically
+# Force Fullscreen
 root.attributes('-fullscreen', True)
-
-# Allow exiting fullscreen with ESC key (useful for debugging)
+# Exit fullscreen with ESC (for debugging)
 root.bind("<Escape>", lambda event: root.attributes("-fullscreen", False))
 
 style = ttk.Style()
@@ -113,8 +113,29 @@ for frame in (page_camera, page_logs, page_history):
 def show_frame(frame):
     frame.tkraise()
 
+# --- SYSTEM CONTROL FUNCTIONS ---
+def close_application():
+    """Safely closes hardware connections and exits the app."""
+    if picam2: picam2.stop()
+    gate_p1.close()
+    gate_p2.on() # Keep gate locked/off
+    led_open.off()
+    led_close.off()
+    root.destroy()
+    sys.exit(0)
+
+def minimize_window():
+    """Minimizes the window (Iconify)."""
+    root.iconify()
+
+# --- FLOATING MINIMIZE BUTTON (Visible on all pages) ---
+btn_minimize = tk.Button(root, text=" — ", command=minimize_window,
+                         bg="#f0f0f0", fg="black", font=("Arial", 12, "bold"),
+                         relief="flat", bd=1)
+btn_minimize.place(relx=1.0, x=-10, y=10, anchor="ne")
+
+# --- HEADER CREATOR ---
 def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=None):
-    # Reduced padding to save vertical space on small screens
     header_frame = tk.Frame(parent, bg="white", pady=5)
     header_frame.pack(fill="x", padx=10)
     header_frame.columnconfigure(0, weight=1)
@@ -130,7 +151,6 @@ def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=No
 
     title_container = tk.Frame(header_frame, bg="white")
     title_container.grid(row=0, column=1)
-    # Smaller fonts for smaller screens
     tk.Label(title_container, text=title_text, font=("Helvetica", 18, "bold"), bg="white", fg="black").pack()
     if sub_text:
         tk.Label(title_container, text=sub_text, font=("Helvetica", 10), bg="white", fg="#555").pack()
@@ -142,8 +162,9 @@ def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=No
         btn.grid(row=0, column=2, sticky="e")
 
 # ================= PAGE 1: CAMERA =================
+# [UPDATED] Left button is now "Shutdown"
 create_header(page_camera, "SAVES AI", None,
-              left_btn={'text': "Reset System", 'cmd': lambda: reset_gate_system()},
+              left_btn={'text': "Shutdown", 'cmd': lambda: close_application(), 'color': 'red'},
               right_btn={'text': "Current Session Logs  ➜", 'cmd': lambda: show_frame(page_logs)})
 
 video_frame_container = tk.Frame(page_camera, bg="#ff4d4d", padx=2, pady=2)
@@ -411,7 +432,9 @@ def update_frame():
                                 scan_buffer.append(clean_text)
                                 most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
-                                    latency = current_time - first_sight_times.get(most_common, current_time)
+                                    
+                                    # [UPDATED] Latency Calculation: Sum of Detection + OCR time in seconds
+                                    latency = (t_detect + t_ocr_ms) / 1000.0
                                     
                                     if most_common in authorized_plates:
                                         row = auth_df[auth_df['Plate'] == most_common].iloc[0]
