@@ -7,7 +7,7 @@ import pandas as pd
 import os
 import re
 import sys
-import warnings
+import warnings # [FIX] To suppress terminal warnings
 from datetime import datetime
 from collections import Counter, deque
 import csv 
@@ -17,8 +17,8 @@ from PIL import Image, ImageTk
 from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED 
 from picamera2 import Picamera2
 
-# [FIX] Suppress PyTorch/Numpy warnings to keep terminal clean
-warnings.filterwarnings("ignore", category=UserWarning)
+# [FIX] Suppress PyTorch/Pin Memory warnings to keep terminal clean
+warnings.filterwarnings("ignore")
 
 # ==========================================
 #          CONFIGURATION
@@ -99,9 +99,9 @@ root.bind("<Escape>", lambda event: root.attributes("-fullscreen", False))
 
 style = ttk.Style()
 style.theme_use("clam")
-style.configure("Treeview.Heading", background="#cccccc", foreground="white", font=("Arial", 12, "bold"), relief="flat")
+style.configure("Treeview.Heading", background="#cccccc", foreground="white", font=("Arial", 10, "bold"), relief="flat")
 style.map("Treeview.Heading", background=[('active', '#b3b3b3')])
-style.configure("Treeview", font=("Arial", 11), rowheight=30, background="white", fieldbackground="white")
+style.configure("Treeview", font=("Arial", 9), rowheight=25, background="white", fieldbackground="white")
 
 container = tk.Frame(root, bg="white")
 container.pack(fill="both", expand=True)
@@ -119,9 +119,7 @@ def show_frame(frame):
 # --- SYSTEM CONTROL FUNCTIONS ---
 def close_application():
     print("Shutting down system...")
-    if picam2: 
-        try: picam2.stop()
-        except: pass
+    if picam2: picam2.stop()
     gate_p1.close()
     gate_p2.on() 
     led_open.off()
@@ -132,6 +130,7 @@ def close_application():
 def minimize_window():
     root.iconify()
 
+# Floating Minimize Button
 btn_minimize = tk.Button(root, text=" — ", command=minimize_window,
                          bg="#f0f0f0", fg="black", font=("Arial", 14, "bold"),
                          relief="flat", bd=1)
@@ -139,29 +138,30 @@ btn_minimize.place(relx=1.0, x=-10, y=10, anchor="ne")
 
 # --- HEADER CREATOR ---
 def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=None):
-    header_frame = tk.Frame(parent, bg="white", pady=15)
-    header_frame.pack(fill="x", padx=20)
+    # [FIX] Increased PADX to 60 to prevent stretching to the very edge
+    header_frame = tk.Frame(parent, bg="white", pady=5)
+    header_frame.pack(fill="x", padx=60) 
     header_frame.columnconfigure(0, weight=1)
     header_frame.columnconfigure(1, weight=4)
     header_frame.columnconfigure(2, weight=1)
 
     if left_btn:
         btn = tk.Button(header_frame, text=left_btn['text'], command=left_btn['cmd'],
-                        bg="#e0e0e0", fg="#555", font=("Arial", 11, "bold"), 
-                        relief="flat", padx=15, pady=8, bd=0)
+                        bg="#e0e0e0", fg="#555", font=("Arial", 9, "bold"), 
+                        relief="flat", padx=10, pady=5, bd=0)
         if 'color' in left_btn: btn.config(fg=left_btn['color'], bg="#f0f0f0")
         btn.grid(row=0, column=0, sticky="w")
 
     title_container = tk.Frame(header_frame, bg="white")
     title_container.grid(row=0, column=1)
-    tk.Label(title_container, text=title_text, font=("Helvetica", 24, "bold"), bg="white", fg="black").pack()
+    tk.Label(title_container, text=title_text, font=("Helvetica", 18, "bold"), bg="white", fg="black").pack()
     if sub_text:
-        tk.Label(title_container, text=sub_text, font=("Helvetica", 12), bg="white", fg="#555").pack()
+        tk.Label(title_container, text=sub_text, font=("Helvetica", 10), bg="white", fg="#555").pack()
 
     if right_btn:
         btn = tk.Button(header_frame, text=right_btn['text'], command=right_btn['cmd'],
-                        bg="#e0e0e0", fg="#555", font=("Arial", 11, "bold"), 
-                        relief="flat", padx=15, pady=8, bd=0)
+                        bg="#e0e0e0", fg="#555", font=("Arial", 9, "bold"), 
+                        relief="flat", padx=10, pady=5, bd=0)
         btn.grid(row=0, column=2, sticky="e")
 
 # ================= PAGE 1: CAMERA =================
@@ -169,26 +169,28 @@ create_header(page_camera, "SAVES AI", None,
               left_btn={'text': "Shutdown", 'cmd': lambda: close_application(), 'color': 'red'},
               right_btn={'text': "Current Session Logs  ➜", 'cmd': lambda: show_frame(page_logs)})
 
-video_frame_container = tk.Frame(page_camera, bg="#ff4d4d", padx=5, pady=5)
-video_frame_container.pack(fill="both", expand=True, padx=30, pady=20)
+# [FIX] Increased PADX to 60 to make video box smaller (less stretched)
+video_frame_container = tk.Frame(page_camera, bg="#ff4d4d", padx=2, pady=2)
+video_frame_container.pack(fill="both", expand=True, padx=60, pady=5)
 video_frame_container.pack_propagate(False)
 
 video_label = tk.Label(video_frame_container, bg="black")
 video_label.pack(fill="both", expand=True)
 
-status_frame = tk.Frame(page_camera, bg="#333333", pady=10) 
-status_frame.pack(fill="x", side="bottom")
-
-lbl_status_dist = tk.Label(status_frame, text="STATUS: SCANNING | DIST: -- cm", 
-                           font=("Arial", 16, "bold"), bg="#333333", fg="white")
-lbl_status_dist.pack()
+status_frame = tk.Frame(page_camera, bg="white")
+status_frame.pack(fill="x", side="bottom", pady=5)
+lbl_status = tk.Label(status_frame, text="SCANNING", font=("Arial", 11, "bold"), bg="white", fg="black")
+lbl_status.pack(side="left", padx=60)
+lbl_dist = tk.Label(status_frame, text="DIST: -- cm", font=("Arial", 11), bg="white", fg="black")
+lbl_dist.pack(side="right", padx=60)
 
 # ================= PAGE 2 & 3: LOGS =================
 cols = ("Time", "Plate", "Name", "Status", "Latency", "Performance Metrics")
 
 def create_treeview(parent):
     frame = tk.Frame(parent, bg="white")
-    frame.pack(fill="both", expand=True, padx=30, pady=20)
+    # [FIX] Increased PADX to 60 for logs
+    frame.pack(fill="both", expand=True, padx=60, pady=5)
     tree = ttk.Treeview(frame, columns=cols, show="headings", style="Treeview")
     scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scrollbar.set)
@@ -197,8 +199,8 @@ def create_treeview(parent):
     
     for col in cols:
         tree.heading(col, text=col)
-        tree.column(col, anchor="center", width=120)
-    tree.column("Performance Metrics", width=200)
+        tree.column(col, anchor="center", width=90)
+    tree.column("Performance Metrics", width=160)
     tree.tag_configure("authorized", foreground="green")
     tree.tag_configure("unauthorized", foreground="red")
     return tree
@@ -213,7 +215,7 @@ create_header(page_history, "SAVES AI", "past session",
               right_btn={'text': "current session logs  ➜", 'cmd': lambda: show_frame(page_logs)})
 tree_history = create_treeview(page_history)
 
-tk.Button(page_history, text="Refresh Logs", command=lambda: load_history_data(), bg="#e0e0e0", relief="flat", font=("Arial", 12, "bold"), pady=10).pack(side="bottom", fill="x", pady=10, padx=30)
+tk.Button(page_history, text="Refresh Logs", command=lambda: load_history_data(), bg="#e0e0e0", relief="flat").pack(side="bottom", fill="x", pady=5, padx=60)
 
 # ================= LOGIC =================
 logged_vehicles = {} 
@@ -237,14 +239,10 @@ except:
 reader = easyocr.Reader(['en'], gpu=False) 
 model = YOLO('./best_ncnn_model') 
 
-def set_status(status_text, color="white"):
+def set_status(status_text, color="black"):
     global system_state
     system_state = status_text
-    try:
-        current_text = lbl_status_dist.cget("text")
-        dist_text = current_text.split("|")[1] if "|" in current_text else " DIST: -- cm"
-        lbl_status_dist.config(text=f"STATUS: {status_text} |{dist_text}", fg=color)
-    except: pass
+    lbl_status.config(text=status_text, fg=color)
 
 def load_history_data():
     for i in tree_history.get_children(): tree_history.delete(i)
@@ -263,16 +261,15 @@ def load_history_data():
                 
                 tag = "authorized" if "AUTHORIZED" in row.get('Status', '') else "unauthorized"
                 tree_history.insert("", "end", values=(short_ts, row.get('Plate'), row.get('Name'), row.get('Status'), row.get('Latency') + "s", perf_display), tags=(tag,))
-    except Exception as e: pass
+    except Exception as e: print(f"Load Error: {e}")
 
 def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time):
     ts_l = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ts_s = datetime.now().strftime("%H:%M:%S")
-    
     perf_display = f"Det: {det_time:.0f}ms | OCR: {ocr_time:.0f}ms"
     
-    # [FIX] Added Terminal Print for Debugging
-    print(f"[LOG] {status}: {plate} ({name}) - {latency}s | Det: {det_time}ms OCR: {ocr_time}ms")
+    # [FIX] Print logs to terminal so you can see detection
+    print(f"[LOG] {status}: {plate} ({name}) - {latency}s")
 
     try:
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
@@ -293,8 +290,7 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
             set_status("UNAUTHORIZED DETECTED", "red")
             buzzer.beep(on_time=0.1, off_time=0.05, n=4)
             # [FIX] Force Reset back to SCANNING after 3 seconds
-            root.after(3000, lambda: set_status("SCANNING", "white") if not is_gate_busy else None)
-            
+            root.after(3000, lambda: set_status("SCANNING", "black") if not is_gate_busy else None)
     except Exception as e: print(f"Log Error: {e}")
 
 def preprocess_plate(img):
@@ -307,7 +303,7 @@ def reset_gate_system():
     gate_p1.off(); gate_p2.on(); led_open.off(); led_close.on()
     is_gate_busy = vehicle_confirmed = False
     vehicle_entry_start_time = None
-    set_status("SCANNING", "white")
+    set_status("SCANNING", "black")
 
 def execute_close_action():
     set_status("CLOSING GATE", "orange")
@@ -347,13 +343,10 @@ def smart_gate_check():
 
     try:
         dist_cm = sensor.distance * 100
-        dist_text = ""
-        if dist_cm >= 148: dist_text = " DIST: > 150 cm"
-        else: dist_text = f" DIST: {dist_cm:.1f} cm"
-        
-        current_text = lbl_status_dist.cget("text")
-        status_part = current_text.split("|")[0] if "|" in current_text else "STATUS: SCANNING "
-        lbl_status_dist.config(text=f"{status_part}|{dist_text}")
+        if dist_cm >= 148:
+            lbl_dist.config(text="DIST: > 150 cm", fg="black")
+        else:
+            lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
         if is_gate_busy and system_state != "CLOSING GATE":
             if not vehicle_confirmed:
@@ -361,12 +354,13 @@ def smart_gate_check():
                     if vehicle_entry_start_time is None: vehicle_entry_start_time = time.time()
                     if (time.time() - vehicle_entry_start_time) >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
-                else: vehicle_entry_start_time = None
+                else:
+                    vehicle_entry_start_time = None
             elif vehicle_confirmed and dist_cm > SAFETY_DISTANCE_CM:
                 start_post_entry_wait()
                 return
 
-    except Exception as e: pass # Suppress sensor errors in loop
+    except Exception as e: print(f"Sensor Error: {e}")
     root.after(SENSOR_POLL_RATE, smart_gate_check)
 
 def start_post_entry_wait():
@@ -384,8 +378,7 @@ def monitor_post_entry_timer():
     if system_state != "POST-ENTRY SCAN": return
     elapsed = time.time() - last_plate_seen_time
     countdown = max(0, EXIT_SCAN_COOLDOWN - elapsed)
-    lbl_status_dist.config(text=f"STATUS: CLOSING IN {countdown:.1f}s |{lbl_status_dist.cget('text').split('|')[1]}", fg="orange")
-    
+    lbl_status.config(text=f"CLOSING IN: {countdown:.1f}s", fg="orange")
     if elapsed >= EXIT_SCAN_COOLDOWN:
         execute_close_action()
     else:
@@ -396,6 +389,9 @@ def update_frame():
     try:
         frame = picam2.capture_array() if picam2 else np.zeros((540, 960, 3), dtype=np.uint8)
     except: root.after(100, update_frame); return
+
+    current_dist = sensor.distance * 100
+    # cv2.putText(frame, f"STATUS: {system_state}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
 
     h, w, _ = frame.shape
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
