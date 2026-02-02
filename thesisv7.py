@@ -21,7 +21,7 @@ from picamera2 import Picamera2
 warnings.filterwarnings("ignore")
 
 # ==========================================
-#           CONFIGURATION
+#            CONFIGURATION
 # ==========================================
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
@@ -42,9 +42,9 @@ SENSOR_POLL_RATE = 100
 POST_ENTRY_DELAY = 0.5   
 EXIT_SCAN_COOLDOWN = 5.0 
 
-# [NEW] Ultrasonic Stability Config
-DISTANCE_BUFFER_LEN = 5 # Number of readings to filter noise
-HYSTERESIS_OFFSET = 15  # Extra cm required to confirm vehicle has left
+# Ultrasonic Stability Config
+DISTANCE_BUFFER_LEN = 5 
+HYSTERESIS_OFFSET = 15  
 
 # --- HARDWARE PINS ---
 GATE_PIN_1 = 17 
@@ -61,7 +61,6 @@ LED_CLOSE_PIN = 6
 try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
     gate_p2 = OutputDevice(GATE_PIN_2, active_high=True, initial_value=True)
-    # [FIX] Set max_distance slightly higher to avoid 0.0 clipping on noise
     sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=2.0, queue_len=5)
     buzzer = Buzzer(BUZZER_PIN)
     led_open = LED(LED_OPEN_PIN)
@@ -87,8 +86,7 @@ except Exception as e:
         def value(self): return 0
         @property
         def distance(self): return 1.5 
-    gate_p1 = gate_p2 = sensor = buzzer = DummyDev()
-    led_open = led_close = DummyDev()
+    gate_p1 = gate_p2 = sensor = buzzer = led_open = led_close = DummyDev()
     picam2 = None 
 
 # ==========================================
@@ -184,7 +182,7 @@ tree_history = create_treeview(page_history)
 # ==========================================
 logged_vehicles = {} 
 scan_buffer = deque(maxlen=SCAN_BUFFER_LEN)
-dist_history = deque(maxlen=DISTANCE_BUFFER_LEN) # [NEW]
+dist_history = deque(maxlen=DISTANCE_BUFFER_LEN) 
 first_sight_times = {} 
 detection_start_time, last_plate_seen_time = None, 0 
 is_gate_busy, vehicle_confirmed, vehicle_entry_start_time = False, False, None
@@ -233,44 +231,33 @@ def trigger_gate_sequence():
     gate_p1.on(); gate_p2.off(); led_open.on(); led_close.off()
     root.after(GATE_ACTION_TIME, lambda: root.after(100, smart_gate_check))
 
-# ==========================================
-#           [NEW] ULTRASONIC LOGIC
-# ==========================================
+# --- ULTRASONIC LOGIC ---
 def get_filtered_distance():
-    """Removes noise spikes using a median filter across the last 5 readings."""
     try:
         val = sensor.distance * 100
-        if val <= 2.0 or val >= 180.0: return None # Discard obvious errors
+        if val <= 2.0 or val >= 180.0: return None 
         dist_history.append(val)
         if len(dist_history) < DISTANCE_BUFFER_LEN: return val
-        return sorted(list(dist_history))[len(dist_history)//2] # Return Median
+        return sorted(list(dist_history))[len(dist_history)//2] 
     except: return None
 
 def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
     if system_state in ["POST-ENTRY SCAN", "CLOSING GATE"]: return
-
     dist_cm = get_filtered_distance()
-    
     if dist_cm is not None:
-        # Display Distance
         if dist_cm >= 140: lbl_dist.config(text="DIST: CLEAR", fg="black")
         else: lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
-
         if is_gate_busy:
-            # Step 1: Confirm Vehicle Arrival (Consistent signal)
             if not vehicle_confirmed:
                 if dist_cm < SAFETY_DISTANCE_CM:
                     if vehicle_entry_start_time is None: vehicle_entry_start_time = time.time()
                     if (time.time() - vehicle_entry_start_time) >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
                 else: vehicle_entry_start_time = None
-
-            # Step 2: Confirm Vehicle Departure (Hysteresis applied)
             elif vehicle_confirmed and dist_cm > (SAFETY_DISTANCE_CM + HYSTERESIS_OFFSET):
                 start_post_entry_wait()
                 return
-
     root.after(SENSOR_POLL_RATE, smart_gate_check)
 
 def start_post_entry_wait():
@@ -300,6 +287,9 @@ def reset_gate_system():
     vehicle_entry_start_time = None
     set_status("SCANNING", "black")
 
+# ==========================================
+#            MAIN FRAME UPDATE
+# ==========================================
 def update_frame():
     global detection_start_time, last_plate_seen_time
     try: frame = picam2.capture_array() if picam2 else np.zeros((540, 960, 3), dtype=np.uint8)
@@ -331,7 +321,24 @@ def update_frame():
                         if p_crop.size > 0:
                             t_ocr = time.perf_counter()
                             ocr_res = reader.readtext(cv2.cvtColor(p_crop, cv2.COLOR_RGB2GRAY), detail=0)
-                            clean_text = "".join([c for c in "".join(ocr_res).upper() if c.isalnum()])
+                            
+                            # --- Rearranging & Cleaning Script ---
+                            raw_text = "".join(ocr_res).upper()
+                            clean_text = "".join([c for c in raw_text if c.isalnum()])
+                            
+                            # Logic to rearrange if digits appear before letters
+                            if len(clean_text) > 0 and clean_text[0].isdigit() and clean_text[-1].isalpha():
+                                split_idx = -1
+                                for i, char in enumerate(clean_text):
+                                    if char.isalpha(): 
+                                        split_idx = i
+                                        break
+                                if split_idx > 0:
+                                    part_digits, part_letters = clean_text[:split_idx], clean_text[split_idx:]
+                                    if part_digits.isdigit() and part_letters.isalpha():
+                                        clean_text = f"{part_letters}{part_digits}"
+                            # --------------------------------------
+
                             t_ocr_ms = (time.perf_counter() - t_ocr) * 1000
                             if len(clean_text) > 3: 
                                 scan_buffer.append(clean_text)
@@ -346,7 +353,7 @@ def update_frame():
         if not detected_box and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear()
 
-    # Resizing
+    # Resizing for GUI
     win_w, win_h = video_frame_container.winfo_width(), video_frame_container.winfo_height()
     if win_w > 10:
         scale = min(win_w / w, win_h / h)
