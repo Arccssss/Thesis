@@ -20,10 +20,10 @@ from picamera2 import Picamera2
 
 # --- INITIALIZATION & SUPPRESSION ---
 warnings.filterwarnings("ignore")
-logging.getLogger("ppocr").setLevel(logging.ERROR) # Suppress Paddle logs
+logging.getLogger("ppocr").setLevel(logging.ERROR)
 
 # ==========================================
-#           CONFIGURATION
+#             CONFIGURATION
 # ==========================================
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
@@ -57,7 +57,6 @@ LED_CLOSE_PIN = 6
 # ==========================================
 #          HARDWARE & MODELS
 # ==========================================
-# Optimized PaddleOCR for Raspberry Pi
 paddle_reader = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=False, show_log=False)
 model = YOLO('./best_ncnn_model') 
 
@@ -72,7 +71,6 @@ try:
     led_close.on()
     
     picam2 = Picamera2()
-    # Capturing at 720p (Wide Angle)
     config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1280, 720)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
@@ -94,18 +92,20 @@ except Exception as e:
     picam2 = None 
 
 # ==========================================
-#             GUI SETUP
+#               GUI SETUP (70% SCALED)
 # ==========================================
 root = tk.Tk()
 root.title("SAVES AI Control System")
 root.configure(bg="white")
+# Scaled full screen simulation or fixed size (70% of 1080p is roughly 1344x756)
 root.attributes('-fullscreen', True)
 root.bind("<Escape>", lambda event: root.attributes("-fullscreen", False))
 
 style = ttk.Style()
 style.theme_use("clam")
-style.configure("Treeview.Heading", background="#cccccc", font=("Arial", 10, "bold"))
-style.configure("Treeview", font=("Arial", 9), rowheight=25)
+# Scaled fonts (Original 10 -> 7, 9 -> 6)
+style.configure("Treeview.Heading", background="#cccccc", font=("Arial", 7, "bold"))
+style.configure("Treeview", font=("Arial", 6), rowheight=18)
 
 container = tk.Frame(root, bg="white")
 container.pack(fill="both", expand=True)
@@ -120,34 +120,37 @@ for frame in (page_camera, page_logs, page_history):
 def show_frame(frame):
     frame.tkraise()
 
-# --- GUI HELPERS ---
+# --- GUI HELPERS (70% SCALED) ---
 def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=None):
-    header_frame = tk.Frame(parent, bg="white", pady=5)
-    header_frame.pack(fill="x", padx=60) 
+    header_frame = tk.Frame(parent, bg="white", pady=3) # Scaled padding
+    header_frame.pack(fill="x", padx=42) # Scaled 60 -> 42
     header_frame.columnconfigure(0, weight=1)
     header_frame.columnconfigure(1, weight=4)
     header_frame.columnconfigure(2, weight=1)
 
     if left_btn:
         btn = tk.Button(header_frame, text=left_btn['text'], command=left_btn['cmd'],
-                        bg="#f0f0f0", fg=left_btn.get('color', 'black'), font=("Arial", 9, "bold"), relief="flat", padx=10)
+                        bg="#f0f0f0", fg=left_btn.get('color', 'black'), 
+                        font=("Arial", 6, "bold"), relief="flat", padx=7) # Scaled padding/font
         btn.grid(row=0, column=0, sticky="w")
 
     title_container = tk.Frame(header_frame, bg="white")
     title_container.grid(row=0, column=1)
-    tk.Label(title_container, text=title_text, font=("Helvetica", 18, "bold"), bg="white").pack()
+    # Scaled 18 -> 13
+    tk.Label(title_container, text=title_text, font=("Helvetica", 13, "bold"), bg="white").pack()
     if sub_text:
-        tk.Label(title_container, text=sub_text, font=("Helvetica", 10), bg="white", fg="#555").pack()
+        # Scaled 10 -> 7
+        tk.Label(title_container, text=sub_text, font=("Helvetica", 7), bg="white", fg="#555").pack()
 
     if right_btn:
         btn = tk.Button(header_frame, text=right_btn['text'], command=right_btn['cmd'],
-                        bg="#f0f0f0", fg="black", font=("Arial", 9, "bold"), relief="flat", padx=10)
+                        bg="#f0f0f0", fg="black", font=("Arial", 6, "bold"), relief="flat", padx=7)
         btn.grid(row=0, column=2, sticky="e")
 
 def create_treeview(parent):
     cols = ("Time", "Plate", "Name", "Status", "Latency", "Performance Metrics")
     frame = tk.Frame(parent, bg="white")
-    frame.pack(fill="both", expand=True, padx=60, pady=5)
+    frame.pack(fill="both", expand=True, padx=42, pady=3) # Scaled 60/5 -> 42/3
     tree = ttk.Treeview(frame, columns=cols, show="headings")
     scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scrollbar.set)
@@ -155,7 +158,7 @@ def create_treeview(parent):
     tree.pack(side="left", fill="both", expand=True)
     for col in cols:
         tree.heading(col, text=col)
-        tree.column(col, anchor="center", width=90)
+        tree.column(col, anchor="center", width=63) # Scaled width 90 -> 63
     tree.tag_configure("authorized", foreground="green")
     tree.tag_configure("unauthorized", foreground="red")
     return tree
@@ -163,15 +166,16 @@ def create_treeview(parent):
 # --- PAGE ASSEMBLING ---
 create_header(page_camera, "SAVES AI", None,
               left_btn={'text': "Shutdown", 'cmd': sys.exit, 'color': 'red'},
-              right_btn={'text': "Current Session Logs ➜", 'cmd': lambda: show_frame(page_logs)})
+              right_btn={'text': "Session Logs ➜", 'cmd': lambda: show_frame(page_logs)})
 
 video_label = tk.Label(page_camera, bg="black")
-video_label.pack(fill="both", expand=True, padx=60, pady=5)
+video_label.pack(fill="both", expand=True, padx=42, pady=3)
 
-lbl_status = tk.Label(page_camera, text="SCANNING", font=("Arial", 11, "bold"), bg="white")
-lbl_status.pack(side="left", padx=60)
-lbl_dist = tk.Label(page_camera, text="DIST: -- cm", font=("Arial", 11), bg="white")
-lbl_dist.pack(side="right", padx=60)
+# Scaled font 11 -> 8
+lbl_status = tk.Label(page_camera, text="SCANNING", font=("Arial", 8, "bold"), bg="white")
+lbl_status.pack(side="left", padx=42)
+lbl_dist = tk.Label(page_camera, text="DIST: -- cm", font=("Arial", 8), bg="white")
+lbl_dist.pack(side="right", padx=42)
 
 tree = create_treeview(page_logs)
 create_header(page_logs, "SAVES AI", "current session",
@@ -240,7 +244,6 @@ def update_frame():
     h, w, _ = frame.shape
     curr_t = time.time()
 
-    # ROI Calculation
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
     roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
     cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), ROI_COLOR, 2)
@@ -282,8 +285,9 @@ def update_frame():
         if not detected and curr_t - last_plate_seen_time > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear()
 
-    # Resizing for GUI Display
-    win_w, win_h = 800, 450
+    # --- VIDEO SCALING (70%) ---
+    # Original: 800x450 -> Scaled: 560x315
+    win_w, win_h = 560, 315
     img = Image.fromarray(cv2.resize(frame, (win_w, win_h)))
     imgtk = ImageTk.PhotoImage(image=img)
     video_label.imgtk = imgtk; video_label.configure(image=imgtk)
