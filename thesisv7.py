@@ -213,11 +213,23 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
         writer = csv.writer(f)
         writer.writerow([plate, name, faculty, status, ts_l, f"{latency:.4f}", f"{det_time:.2f}", f"{ocr_time:.2f}"])
     
-    if status == "AUTHORIZED": trigger_gate_sequence()
+    if status == "AUTHORIZED":
+        trigger_gate_sequence()
     else:
-        set_status("UNAUTHORIZED DETECTED", "red")
-        buzzer.beep(on_time=0.1, off_time=0.05, n=4)
-        root.after(3000, lambda: set_status("SCANNING", "black") if not is_gate_busy else None)
+        # If UNAUTHORIZED is detected while in POST-ENTRY SCAN, 
+        # we treat it as a "Next Vehicle" to keep the gate open for the visitor,
+        # but we must ensure it eventually resets.
+        if system_state == "POST-ENTRY SCAN":
+            set_status("UNAUTHORIZED NEXT VEHICLE", "red")
+            global vehicle_confirmed, vehicle_entry_start_time, last_plate_seen_time
+            vehicle_confirmed = False
+            vehicle_entry_start_time = None
+            last_plate_seen_time = time.time() # Reset the closing timer
+        else:
+            set_status("UNAUTHORIZED DETECTED", "red")
+            buzzer.beep(on_time=0.1, off_time=0.05, n=4)
+            # Reset back to SCANNING only if we aren't busy with a gate operation
+            root.after(3000, lambda: set_status("SCANNING", "black") if not is_gate_busy else None)
 
 def trigger_gate_sequence():
     global is_gate_busy, vehicle_confirmed, vehicle_entry_start_time
@@ -282,10 +294,12 @@ def monitor_post_entry_timer():
         root.after(100, monitor_post_entry_timer)
 
 def reset_gate_system():
-    global is_gate_busy, vehicle_confirmed, vehicle_entry_start_time
+    global is_gate_busy, vehicle_confirmed, vehicle_entry_start_time, system_state
     is_gate_busy = vehicle_confirmed = False
     vehicle_entry_start_time = None
+    # Force the state back to SCANNING no matter what
     set_status("SCANNING", "black")
+    print("✅ System Reset to SCANNING")
 
 # ==========================================
 #            MAIN FRAME UPDATE
