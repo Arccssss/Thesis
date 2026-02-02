@@ -18,9 +18,9 @@ from PIL import Image, ImageTk
 from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED 
 from picamera2 import Picamera2
 
-# --- INITIALIZATION ---
+# --- INITIALIZATION & SUPPRESSION ---
 warnings.filterwarnings("ignore")
-logging.getLogger("ppocr").setLevel(logging.ERROR)
+logging.getLogger("ppocr").setLevel(logging.ERROR) # Suppress Paddle logs
 
 # ==========================================
 #           CONFIGURATION
@@ -31,29 +31,34 @@ LOG_COOLDOWN = 5
 SCAN_BUFFER_LEN = 9  
 CONFIDENCE_THRESHOLD = 4
 
-# RE-ENABLED: Manual ROI Scales
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5 
-ROI_COLOR = (0, 255, 0)
+ROI_COLOR = (0, 255, 0) 
 
 GRACE_PERIOD = 0.3      
 GATE_ACTION_TIME = 3000 
 ABSENCE_RESET_TIME = 2.5 
+
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
 SENSOR_POLL_RATE = 100    
+
 POST_ENTRY_DELAY = 0.5   
 EXIT_SCAN_COOLDOWN = 5.0 
 
-# Hardware Pins
-GATE_PIN_1, GATE_PIN_2 = 17, 27
-US_TRIG_PIN, US_ECHO_PIN = 23, 24
+# --- HARDWARE PINS ---
+GATE_PIN_1 = 17 
+GATE_PIN_2 = 27 
+US_TRIG_PIN = 23 
+US_ECHO_PIN = 24 
 BUZZER_PIN = 22
-LED_OPEN_PIN, LED_CLOSE_PIN = 5, 6
+LED_OPEN_PIN = 5   
+LED_CLOSE_PIN = 6   
 
 # ==========================================
 #          HARDWARE & MODELS
 # ==========================================
-paddle_reader = PaddleOCR(use_angle_cls=True, lang='en')
+# Optimized PaddleOCR for Raspberry Pi
+paddle_reader = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=False, show_log=False)
 model = YOLO('./best_ncnn_model') 
 
 try:
@@ -63,26 +68,30 @@ try:
     buzzer = Buzzer(BUZZER_PIN)
     led_open = LED(LED_OPEN_PIN)
     led_close = LED(LED_CLOSE_PIN)
-    led_open.off(); led_close.on()
+    led_open.off()
+    led_close.on()
     
     picam2 = Picamera2()
     # Capturing at 720p (Wide Angle)
     config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1280, 720)})
     picam2.configure(config)
-    # ZOOM_CROP REMOVED: Reverting to standard view
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
     picam2.start()
-    print("✅ Hardware Initialized (Standard View)")
+    print(f"✅ Hardware Initialized")
+    
 except Exception as e:
-    print(f"⚠️ HARDWARE ERROR: {e}")
+    print(f"⚠️ INITIALIZATION ERROR: {e}")
     class DummyDev: 
         def on(self): pass
         def off(self): pass
         def beep(self, on_time=0.1, off_time=0.1, n=1): pass
         def close(self): pass
         @property
+        def value(self): return 0
+        @property
         def distance(self): return 1.5 
-    gate_p1 = gate_p2 = sensor = buzzer = led_open = led_close = DummyDev(); picam2 = None
+    gate_p1 = gate_p2 = sensor = buzzer = led_open = led_close = DummyDev()
+    picam2 = None 
 
 # ==========================================
 #             GUI SETUP
@@ -91,10 +100,12 @@ root = tk.Tk()
 root.title("SAVES AI Control System")
 root.configure(bg="white")
 root.attributes('-fullscreen', True)
-root.bind("<Escape>", lambda e: root.attributes("-fullscreen", False))
+root.bind("<Escape>", lambda event: root.attributes("-fullscreen", False))
 
 style = ttk.Style()
 style.theme_use("clam")
+style.configure("Treeview.Heading", background="#cccccc", font=("Arial", 10, "bold"))
+style.configure("Treeview", font=("Arial", 9), rowheight=25)
 
 container = tk.Frame(root, bg="white")
 container.pack(fill="both", expand=True)
@@ -112,42 +123,65 @@ def show_frame(frame):
 # --- GUI HELPERS ---
 def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=None):
     header_frame = tk.Frame(parent, bg="white", pady=5)
-    header_frame.pack(fill="x", padx=60)
+    header_frame.pack(fill="x", padx=60) 
+    header_frame.columnconfigure(0, weight=1)
     header_frame.columnconfigure(1, weight=4)
+    header_frame.columnconfigure(2, weight=1)
+
     if left_btn:
-        tk.Button(header_frame, text=left_btn['text'], command=left_btn['cmd'], fg=left_btn.get('color', 'black'), bg="#f0f0f0", relief="flat", padx=10).grid(row=0, column=0)
+        btn = tk.Button(header_frame, text=left_btn['text'], command=left_btn['cmd'],
+                        bg="#f0f0f0", fg=left_btn.get('color', 'black'), font=("Arial", 9, "bold"), relief="flat", padx=10)
+        btn.grid(row=0, column=0, sticky="w")
+
     title_container = tk.Frame(header_frame, bg="white")
     title_container.grid(row=0, column=1)
-    tk.Label(title_container, text=title_text, font=("Arial", 18, "bold"), bg="white").pack()
-    if sub_text: tk.Label(title_container, text=sub_text, font=("Arial", 10), bg="white", fg="#555").pack()
+    tk.Label(title_container, text=title_text, font=("Helvetica", 18, "bold"), bg="white").pack()
+    if sub_text:
+        tk.Label(title_container, text=sub_text, font=("Helvetica", 10), bg="white", fg="#555").pack()
+
     if right_btn:
-        tk.Button(header_frame, text=right_btn['text'], command=right_btn['cmd'], bg="#f0f0f0", relief="flat", padx=10).grid(row=0, column=2)
+        btn = tk.Button(header_frame, text=right_btn['text'], command=right_btn['cmd'],
+                        bg="#f0f0f0", fg="black", font=("Arial", 9, "bold"), relief="flat", padx=10)
+        btn.grid(row=0, column=2, sticky="e")
 
 def create_treeview(parent):
-    cols = ("Time", "Plate", "Name", "Status", "Latency", "Metrics")
+    cols = ("Time", "Plate", "Name", "Status", "Latency", "Performance Metrics")
     frame = tk.Frame(parent, bg="white")
     frame.pack(fill="both", expand=True, padx=60, pady=5)
     tree = ttk.Treeview(frame, columns=cols, show="headings")
-    for col in cols: tree.heading(col, text=col); tree.column(col, anchor="center", width=100)
+    scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side="right", fill="y")
     tree.pack(side="left", fill="both", expand=True)
+    for col in cols:
+        tree.heading(col, text=col)
+        tree.column(col, anchor="center", width=90)
     tree.tag_configure("authorized", foreground="green")
     tree.tag_configure("unauthorized", foreground="red")
     return tree
 
-# Build Pages
-create_header(page_camera, "SAVES AI", None, {'text': "Shutdown", 'cmd': sys.exit, 'color': 'red'}, {'text': "Logs ➜", 'cmd': lambda: show_frame(page_logs)})
+# --- PAGE ASSEMBLING ---
+create_header(page_camera, "SAVES AI", None,
+              left_btn={'text': "Shutdown", 'cmd': sys.exit, 'color': 'red'},
+              right_btn={'text': "Current Session Logs ➜", 'cmd': lambda: show_frame(page_logs)})
+
 video_label = tk.Label(page_camera, bg="black")
 video_label.pack(fill="both", expand=True, padx=60, pady=5)
-lbl_status = tk.Label(page_camera, text="SCANNING", font=("Arial", 12, "bold"), bg="white")
-lbl_status.pack(pady=5)
-lbl_dist = tk.Label(page_camera, text="DIST: -- cm", bg="white")
-lbl_dist.pack()
+
+lbl_status = tk.Label(page_camera, text="SCANNING", font=("Arial", 11, "bold"), bg="white")
+lbl_status.pack(side="left", padx=60)
+lbl_dist = tk.Label(page_camera, text="DIST: -- cm", font=("Arial", 11), bg="white")
+lbl_dist.pack(side="right", padx=60)
 
 tree = create_treeview(page_logs)
-create_header(page_logs, "Current Session", None, {'text': "← Camera", 'cmd': lambda: show_frame(page_camera)}, {'text': "History ➜", 'cmd': lambda: show_frame(page_history)})
+create_header(page_logs, "SAVES AI", "current session",
+              left_btn={'text': "← camera", 'cmd': lambda: show_frame(page_camera)},
+              right_btn={'text': "history ➜", 'cmd': lambda: show_frame(page_history)})
 
 tree_history = create_treeview(page_history)
-create_header(page_history, "Past History", None, {'text': "← Camera", 'cmd': lambda: show_frame(page_camera)}, {'text': "Current ➜", 'cmd': lambda: show_frame(page_logs)})
+create_header(page_history, "SAVES AI", "past history",
+              left_btn={'text': "← camera", 'cmd': lambda: show_frame(page_camera)},
+              right_btn={'text': "current ➜", 'cmd': lambda: show_frame(page_logs)})
 
 # ==========================================
 #                LOGIC
@@ -206,7 +240,7 @@ def update_frame():
     h, w, _ = frame.shape
     curr_t = time.time()
 
-    # MANUAL ROI CROP (Line 134-138)
+    # ROI Calculation
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
     roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
     cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), ROI_COLOR, 2)
@@ -225,7 +259,6 @@ def update_frame():
                 if detection_start_time is None: detection_start_time = curr_t
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box)
-                    # Adjust box to original frame coordinates
                     cv2.rectangle(frame, (x1+roi_x, y1+roi_y), (x2+roi_x, y2+roi_y), (0, 255, 0), 2)
                     
                     if curr_t - detection_start_time > GRACE_PERIOD:
@@ -249,8 +282,9 @@ def update_frame():
         if not detected and curr_t - last_plate_seen_time > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear()
 
-    # GUI Resize
-    img = Image.fromarray(cv2.resize(frame, (800, 450)))
+    # Resizing for GUI Display
+    win_w, win_h = 800, 450
+    img = Image.fromarray(cv2.resize(frame, (win_w, win_h)))
     imgtk = ImageTk.PhotoImage(image=img)
     video_label.imgtk = imgtk; video_label.configure(image=imgtk)
     root.after(10, update_frame)
