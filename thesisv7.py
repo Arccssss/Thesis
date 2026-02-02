@@ -26,8 +26,8 @@ warnings.filterwarnings("ignore")
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5  
-SCAN_BUFFER_LEN = 9  
-CONFIDENCE_THRESHOLD = 4
+SCAN_BUFFER_LEN = 10  
+CONFIDENCE_THRESHOLD = 5
 
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5 
 ROI_COLOR = (0, 255, 0) 
