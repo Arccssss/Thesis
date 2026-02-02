@@ -246,30 +246,58 @@ def trigger_gate_sequence():
 # --- ULTRASONIC LOGIC ---
 def get_filtered_distance():
     try:
+        # 1. Immediate reading
         val = sensor.distance * 100
-        if val <= 2.0 or val >= 180.0: return None 
+        
+        # 2. Filter out garbage (0.0 or out-of-range)
+        if val <= 1.0 or val >= 190.0: 
+            return None 
+
         dist_history.append(val)
-        if len(dist_history) < DISTANCE_BUFFER_LEN: return val
-        return sorted(list(dist_history))[len(dist_history)//2] 
-    except: return None
+        
+        # 3. If we have at least 1 reading, we can work. 
+        # We don't NEED a full buffer, but we use the median of whatever we have.
+        current_readings = list(dist_history)
+        return sorted(current_readings)[len(current_readings)//2]
+    except:
+        return None
 
 def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
-    if system_state in ["POST-ENTRY SCAN", "CLOSING GATE"]: return
+    
+    # Don't run logic if we are already in the middle of closing or exiting
+    if system_state in ["POST-ENTRY SCAN", "CLOSING GATE"]: 
+        return
+
     dist_cm = get_filtered_distance()
+    
     if dist_cm is not None:
-        if dist_cm >= 140: lbl_dist.config(text="DIST: CLEAR", fg="black")
-        else: lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
+        # Update Display
+        if dist_cm >= 140: 
+            lbl_dist.config(text="DIST: CLEAR", fg="black")
+        else:
+            lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", 
+                           fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
+
         if is_gate_busy:
+            # ARRIVAL LOGIC
             if not vehicle_confirmed:
                 if dist_cm < SAFETY_DISTANCE_CM:
-                    if vehicle_entry_start_time is None: vehicle_entry_start_time = time.time()
+                    if vehicle_entry_start_time is None: 
+                        vehicle_entry_start_time = time.time()
                     if (time.time() - vehicle_entry_start_time) >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
-                else: vehicle_entry_start_time = None
+                else:
+                    vehicle_entry_start_time = None
+
+            # DEPARTURE LOGIC
             elif vehicle_confirmed and dist_cm > (SAFETY_DISTANCE_CM + HYSTERESIS_OFFSET):
+                # Clear the buffer on departure to prevent stale data for the next car
+                dist_history.clear() 
                 start_post_entry_wait()
                 return
+
+    # SENSOR RECOVERY: If it returns None (stuck), we still want to keep polling
     root.after(SENSOR_POLL_RATE, smart_gate_check)
 
 def start_post_entry_wait():
