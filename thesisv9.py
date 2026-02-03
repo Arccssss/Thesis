@@ -166,13 +166,11 @@ create_header(page_camera, "SAVES AI", None,
               left_btn={'text': "Shutdown", 'cmd': close_application},
               right_btn={'text': "Current Logs ➜", 'cmd': lambda: show_frame(page_logs)})
 
-video_frame_container = tk.Frame(page_camera, bg="#ff4d4d", padx=2, pady=2)
-video_frame_container.pack(fill="both", expand=True, padx=10, pady=5)
-
-# --- CRITICAL FIX START ---
-# Prevents the container from resizing to fit the image, stopping the growth loop
-video_frame_container.pack_propagate(False) 
-# --- CRITICAL FIX END ---
+# FIX: Removed padding (padx=0, pady=0) to let camera fill available space
+# FIX: Set bg="black" to create cinema bars instead of white gaps
+video_frame_container = tk.Frame(page_camera, bg="black")
+video_frame_container.pack(fill="both", expand=True, padx=0, pady=0)
+video_frame_container.pack_propagate(False)
 
 video_label = tk.Label(video_frame_container, bg="black")
 video_label.pack(fill="both", expand=True)
@@ -439,12 +437,16 @@ def update_frame():
             detection_start_time = None
             scan_buffer.clear()
 
-    # Resize for GUI
+    # Resize for GUI (Aspect Ratio Maintained)
     win_w = video_frame_container.winfo_width()
     win_h = video_frame_container.winfo_height()
     
     if win_w > 10 and win_h > 10:
-        img_resized = cv2.resize(frame_rgb, (win_w, win_h))
+        # Calculate aspect ratio scaling
+        scale = min(win_w / w, win_h / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        
+        img_resized = cv2.resize(frame_rgb, (new_w, new_h))
         imgtk = ImageTk.PhotoImage(image=Image.fromarray(img_resized))
         video_label.imgtk = imgtk
         video_label.configure(image=imgtk)
