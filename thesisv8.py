@@ -22,8 +22,8 @@ from picamera2 import Picamera2
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5  
-SCAN_BUFFER_LEN = 5
-CONFIDENCE_THRESHOLD = 2
+SCAN_BUFFER_LEN = 9  
+CONFIDENCE_THRESHOLD = 4
 
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5 
 ROI_COLOR = (0, 255, 0) 
@@ -56,7 +56,6 @@ try:
     sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.5, queue_len=3)
     buzzer = Buzzer(BUZZER_PIN)
     
-    # LED Aliases
     led_green_auth = LED(LED_OPEN_PIN)
     led_red_unauth = LED(LED_CLOSE_PIN)
     
@@ -96,7 +95,6 @@ root.configure(bg="white")
 root.attributes('-fullscreen', True)
 root.bind("<Escape>", lambda event: root.attributes("-fullscreen", True))
 
-# --- WINDOW CONTROLS ---
 def close_application():
     if picam2: picam2.stop()
     gate_p1.close(); gate_p2.on() 
@@ -137,7 +135,6 @@ def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=No
     if left_btn:
         bg_color = "#ffcccc" if "Shutdown" in left_btn['text'] else "#e0e0e0"
         fg_color = "red" if "Shutdown" in left_btn['text'] else "#555"
-        
         btn = tk.Button(header_frame, text=left_btn['text'], command=left_btn['cmd'],
                         bg=bg_color, fg=fg_color, font=("Arial", 9, "bold"), 
                         relief="flat", padx=10, pady=5, bd=0)
@@ -212,7 +209,6 @@ tree_history = create_treeview(page_history)
 
 tk.Button(page_history, text="Refresh Logs", command=lambda: load_history_data(), bg="#e0e0e0", relief="flat").pack(side="bottom", fill="x", pady=5, padx=10)
 
-# --- MINIMIZE BUTTON ---
 btn_minimize = tk.Button(root, text=" — ", command=minimize_window, 
                         bg="#f0f0f0", font=("Arial", 14, "bold"), relief="flat", bd=1)
 btn_minimize.place(relx=1.0, x=-10, y=10, anchor="ne")
@@ -246,14 +242,13 @@ def set_status(status_text, color="black"):
     lbl_status.config(text=status_text, fg=color)
 
 def update_distance_ui(dist_cm):
-    """Helper to update UI label from anywhere"""
     if dist_cm >= 148:
         lbl_dist.config(text="DIST: > 150 cm", fg="black")
     else:
         lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
 def load_history_data():
-    """Robust History Loader"""
+    """Robust History Loader - Handles crashes & missing headers"""
     for i in tree_history.get_children(): 
         tree_history.delete(i)
         
@@ -267,10 +262,8 @@ def load_history_data():
             
             for row in reversed(rows):
                 ts = row.get('Timestamp', '')
-                try: 
-                    short_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
-                except: 
-                    short_ts = ts
+                try: short_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
+                except: short_ts = ts
                 
                 plate = row.get('Plate') or row.get('plate') or "Unknown"
                 name = row.get('Name') or row.get('name') or "Unknown"
@@ -282,6 +275,7 @@ def load_history_data():
                 try: ocr = float(row.get('OCR') or row.get('ocr', 0))
                 except ValueError: ocr = 0.0
 
+                # Note: We display 'Latency' (Processing Time) on the GUI
                 try: latency = float(row.get('Latency') or row.get('latency', 0))
                 except ValueError: latency = 0.0
                 
@@ -289,46 +283,36 @@ def load_history_data():
                 tag = "authorized" if "AUTHORIZED" in status_txt else "unauthorized"
                 
                 tree_history.insert("", "end", values=(
-                    short_ts, 
-                    plate, 
-                    name, 
-                    status_txt, 
-                    f"{latency:.2f}s", 
-                    perf_display
+                    short_ts, plate, name, status_txt, f"{latency:.2f}s", perf_display
                 ), tags=(tag,))
                 
     except Exception as e: 
         print(f"History Load Error: {e}")
 
-def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time):
+def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time, auth_duration):
     ts_l = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ts_s = datetime.now().strftime("%H:%M:%S")
-    
     perf_display = f"Det: {det_time:.0f}ms | OCR: {ocr_time:.0f}ms"
     
     try:
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         tree.insert("", 0, values=(ts_s, plate, name, status, f"{latency:.2f}s", perf_display), tags=(tag,))
         
-        # --- AUTO-CREATE FILE LOGIC ---
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
         
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            fieldnames = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
+            # [NEW] Added 'AuthDuration' to headers. Kept hidden from frontend.
+            fieldnames = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR", "AuthDuration"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             
             if not file_exists:
                 writer.writeheader()
                 
             writer.writerow({
-                "Plate": plate,
-                "Name": name,
-                "Faculty": faculty,
-                "Status": status,
-                "Timestamp": ts_l,
-                "Latency": f"{latency:.4f}",
-                "Det": f"{det_time:.2f}",
-                "OCR": f"{ocr_time:.2f}"
+                "Plate": plate, "Name": name, "Faculty": faculty, "Status": status,
+                "Timestamp": ts_l, "Latency": f"{latency:.4f}",
+                "Det": f"{det_time:.2f}", "OCR": f"{ocr_time:.2f}",
+                "AuthDuration": f"{auth_duration:.4f}" 
             })
         
         if page_history.winfo_ismapped():
@@ -337,10 +321,7 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
         if status == "AUTHORIZED": 
             trigger_gate_sequence()
         else:
-            # --- UNAUTHORIZED SEQUENCE (LEDs) ---
             set_status("UNAUTHORIZED DETECTED", "red")
-            
-            # Red Blinks, Green OFF
             led_green_auth.off()
             led_red_unauth.blink(on_time=0.1, off_time=0.1, n=5, background=True)
             buzzer.beep(on_time=0.1, off_time=0.05, n=4)
@@ -363,10 +344,7 @@ def preprocess_plate(img):
 def reset_gate_system():
     global is_gate_busy, vehicle_entry_start_time, vehicle_confirmed
     gate_p1.off(); gate_p2.on()
-    
-    # RESET: Red ON (Stop), Green OFF
     led_green_auth.off(); led_red_unauth.on()
-    
     is_gate_busy = vehicle_confirmed = False
     vehicle_entry_start_time = None
     set_status("SCANNING", "black")
@@ -374,10 +352,7 @@ def reset_gate_system():
 def execute_close_action():
     set_status("CLOSING GATE", "orange")
     gate_p1.off(); gate_p2.on()
-    
-    # CLOSING: Red ON, Green OFF
     led_green_auth.off(); led_red_unauth.on()
-    
     root.after(GATE_ACTION_TIME, reset_gate_system)
 
 # ================= GATE LOGIC =================
@@ -386,16 +361,11 @@ def trigger_gate_sequence():
     
     if is_gate_busy and system_state == "POST-ENTRY SCAN":
         set_status("NEXT VEHICLE DETECTED", "green")
-        
-        # Blink Green to acknowledge
         for _ in range(2):
             led_green_auth.on(); buzzer.on(); time.sleep(0.1)
             led_green_auth.off(); buzzer.off(); time.sleep(0.1)
         
-        # STOP state (Next vehicle must wait)
-        led_green_auth.off() 
-        led_red_unauth.on()
-        
+        led_green_auth.off(); led_red_unauth.on()
         vehicle_confirmed = False
         vehicle_entry_start_time = None
         root.after(100, smart_gate_check)
@@ -406,18 +376,17 @@ def trigger_gate_sequence():
     is_gate_busy = True
     set_status("AUTHORIZED: OPENING", "green")
     
-    # Authorized Warning (Green Blinks)
     for _ in range(2):
         led_green_auth.on(); buzzer.on(); time.sleep(0.1)
         led_green_auth.off(); buzzer.off(); time.sleep(0.1)
 
+    # --- AUTHORIZED STATE: GREEN ON ---
+    led_green_auth.on()
+    led_red_unauth.off()
+
     gate_p1.on(); gate_p2.off()
     
-    # --- AUTHORIZATION STATE: GREEN ON, RED OFF ---
-    led_green_auth.on()   
-    led_red_unauth.off()  
-    
-    root.after(GATE_ACTION_TIME, lambda: root.after(100, smart_gate_check))
+    # smart_gate_check is already running in its own loop
 
 def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
@@ -426,22 +395,18 @@ def smart_gate_check():
         dist_cm = sensor.distance * 100
         update_distance_ui(dist_cm)
 
-        if system_state == "POST-ENTRY SCAN": 
-            return 
+        if system_state == "POST-ENTRY SCAN": return 
 
         if is_gate_busy and system_state != "CLOSING GATE":
             if not vehicle_confirmed:
                 if dist_cm < SAFETY_DISTANCE_CM:
                     if vehicle_entry_start_time is None: vehicle_entry_start_time = time.time()
                     
-                    # --- VEHICLE CONFIRMATION LOGIC ---
                     if (time.time() - vehicle_entry_start_time) >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
-                        
-                        # [NEW LOGIC] Vehicle Confirmed -> Turn RED immediately
+                        # [ANTI-TAILGATING] Vehicle Confirmed -> Turn RED immediately
                         led_green_auth.off()
                         led_red_unauth.on()
-                        # -----------------------------------------------------
                         
                 else:
                     vehicle_entry_start_time = None
@@ -456,21 +421,15 @@ def smart_gate_check():
 
 def start_post_entry_wait():
     set_status("WAITING...", "orange")
-    
-    # Red ON, Green OFF (Anti-Tailgating)
     led_green_auth.off()
     led_red_unauth.on()
-    
     root.after(int(POST_ENTRY_DELAY * 1000), lambda: init_post_entry_scan())
 
 def init_post_entry_scan():
     global system_state, last_plate_seen_time
     system_state = "POST-ENTRY SCAN"
-    
-    # Ensure Red ON
     led_green_auth.off()
     led_red_unauth.on()
-    
     last_plate_seen_time = time.time() 
     monitor_post_entry_timer()
 
@@ -481,7 +440,6 @@ def monitor_post_entry_timer():
     countdown = max(0, EXIT_SCAN_COOLDOWN - elapsed)
     lbl_status.config(text=f"CLOSING IN: {countdown:.1f}s", fg="orange")
     
-    # Ensure Red ON
     led_green_auth.off()
     led_red_unauth.on()
 
@@ -550,13 +508,17 @@ def update_frame():
                                 most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
                                     
+                                    # [METRIC 1] Processing Latency (YOLO + OCR)
                                     latency = (t_detect + t_ocr_ms) / 1000.0
+                                    
+                                    # [METRIC 2] Auth Duration (Detection to Log) - Hidden
+                                    auth_duration = current_time - first_sight_times.get(most_common, current_time)
                                     
                                     if most_common in authorized_plates:
                                         row = auth_df[auth_df['Plate'] == most_common].iloc[0]
-                                        log_to_gui_and_csv(most_common, row['Name'], row['Faculty'], "AUTHORIZED", latency, t_detect, t_ocr_ms)
+                                        log_to_gui_and_csv(most_common, row['Name'], row['Faculty'], "AUTHORIZED", latency, t_detect, t_ocr_ms, auth_duration)
                                     elif freq >= CONFIDENCE_THRESHOLD:
-                                        log_to_gui_and_csv(most_common, "Unknown", "Visitor", "UNAUTHORIZED", latency, t_detect, t_ocr_ms)
+                                        log_to_gui_and_csv(most_common, "Unknown", "Visitor", "UNAUTHORIZED", latency, t_detect, t_ocr_ms, auth_duration)
                                     
                                     logged_vehicles[most_common] = current_time
                                     scan_buffer.clear(); first_sight_times.clear()
@@ -564,15 +526,9 @@ def update_frame():
         if not detected_box and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear(); first_sight_times.clear()
 
-    # Aspect Fit Resizing Logic
-    win_w = video_frame_container.winfo_width()
-    win_h = video_frame_container.winfo_height()
-    
     if win_w > 10 and win_h > 10:
         scale = min(win_w / w, win_h / h)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        
+        new_w, new_h = int(w * scale), int(h * scale)
         img = Image.fromarray(cv2.resize(frame, (new_w, new_h)))
         imgtk = ImageTk.PhotoImage(image=img)
         video_label.imgtk = imgtk; video_label.configure(image=imgtk)
