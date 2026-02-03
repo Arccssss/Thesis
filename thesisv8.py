@@ -31,9 +31,12 @@ GRACE_PERIOD = 0.3
 GATE_ACTION_TIME = 3000 
 ABSENCE_RESET_TIME = 10.0 
 
-SAFETY_DISTANCE_CM = 50 
-# [FIX] Changed logic: This is now the TOTAL ACCUMULATED TIME required
-ENTRY_CONFIRM_TARGET = 1.0 
+# SAFETY TIMEOUT: Force reset if stuck for 15s
+GATE_SAFETY_TIMEOUT = 15.0
+
+# SENSOR SETTINGS
+SAFETY_DISTANCE_CM = 100  # Detects cars up to 1 meter
+ENTRY_CONFIRM_TARGET = 0.5 # Needs to see car for 0.5s total (accumulator)
 SENSOR_POLL_RATE = 100    
 
 POST_ENTRY_DELAY = 0.5   
@@ -96,7 +99,6 @@ root.configure(bg="white")
 root.attributes('-fullscreen', True)
 root.bind("<Escape>", lambda event: root.attributes("-fullscreen", True))
 
-# Force Fullscreen after delay
 def force_fullscreen():
     root.attributes('-fullscreen', True)
 root.after(500, force_fullscreen)
@@ -229,9 +231,8 @@ last_plate_seen_time = 0
 is_gate_busy = False
 system_state = "SCANNING" 
 vehicle_confirmed = False
-
-# [FIX] New global variable for accumulation
 accumulated_presence = 0.0
+gate_open_start_time = None 
 
 try:
     auth_df = pd.read_csv(AUTH_FILE, dtype=str)
@@ -348,12 +349,13 @@ def preprocess_plate(img):
     return thresh
 
 def reset_gate_system():
-    global is_gate_busy, vehicle_confirmed, accumulated_presence
+    global is_gate_busy, vehicle_confirmed, accumulated_presence, gate_open_start_time
     gate_p1.off(); gate_p2.on()
     led_green_auth.off(); led_red_unauth.on()
     
     is_gate_busy = vehicle_confirmed = False
-    accumulated_presence = 0.0 # Reset accumulator
+    accumulated_presence = 0.0 
+    gate_open_start_time = None
     set_status("SCANNING", "black")
 
 def execute_close_action():
@@ -364,7 +366,7 @@ def execute_close_action():
 
 # ================= GATE LOGIC =================
 def trigger_gate_sequence():
-    global is_gate_busy, vehicle_confirmed, system_state, accumulated_presence
+    global is_gate_busy, vehicle_confirmed, system_state, accumulated_presence, gate_open_start_time
     
     if is_gate_busy and system_state == "POST-ENTRY SCAN":
         set_status("NEXT VEHICLE DETECTED", "green")
@@ -372,20 +374,20 @@ def trigger_gate_sequence():
             led_green_auth.on(); buzzer.on(); time.sleep(0.1)
             led_green_auth.off(); buzzer.off(); time.sleep(0.1)
         
-        # New vehicle detected in post-scan:
-        # Show GREEN to say "Go", logic will turn Red once entry starts
         led_green_auth.on()
         led_red_unauth.off()
         
         vehicle_confirmed = False
-        accumulated_presence = 0.0 # Reset for new car
+        accumulated_presence = 0.0 
+        gate_open_start_time = time.time()
         root.after(100, smart_gate_check)
         return
 
     if is_gate_busy: return 
 
     is_gate_busy = True
-    accumulated_presence = 0.0 # Reset accumulator
+    accumulated_presence = 0.0 
+    gate_open_start_time = time.time()
     set_status("AUTHORIZED: OPENING", "green")
     
     for _ in range(2):
@@ -408,19 +410,19 @@ def smart_gate_check():
         if system_state == "POST-ENTRY SCAN": return 
 
         if is_gate_busy and system_state != "CLOSING GATE":
+            
+            if gate_open_start_time and (time.time() - gate_open_start_time) > GATE_SAFETY_TIMEOUT:
+                execute_close_action()
+                return
+
             if not vehicle_confirmed:
                 if dist_cm < SAFETY_DISTANCE_CM:
-                    # [FIX] ACCUMULATION LOGIC
-                    # Add time to the counter (Sensor poll rate is ms, so /1000 for seconds)
                     accumulated_presence += (SENSOR_POLL_RATE / 1000.0)
                     
                     if accumulated_presence >= ENTRY_CONFIRM_TARGET:
                         vehicle_confirmed = True
-                        # Vehicle Confirmed (1.0s accumulated) -> Turn RED immediately
                         led_green_auth.off()
                         led_red_unauth.on()
-                # Note: We do NOT reset accumulated_presence to 0 if dist > safety.
-                # This allows it to "bridge the gap" if the sensor flickers.
                 
             elif vehicle_confirmed and dist_cm > SAFETY_DISTANCE_CM:
                 start_post_entry_wait()
@@ -452,7 +454,6 @@ def monitor_post_entry_timer():
     countdown = max(0, EXIT_SCAN_COOLDOWN - elapsed)
     lbl_status.config(text=f"CLOSING IN: {countdown:.1f}s", fg="orange")
     
-    # Only enforce LED state if NO new vehicle detected to avoid overriding green blink
     if not (is_gate_busy and not vehicle_confirmed):
         led_green_auth.off()
         led_red_unauth.on()
@@ -465,7 +466,6 @@ def monitor_post_entry_timer():
 def update_frame():
     global detection_start_time, last_plate_seen_time
     
-    # 1. CAPTURE IMAGE
     if picam2 is None:
         frame = np.random.randint(0, 256, (540, 960, 3), dtype=np.uint8)
         cv2.putText(frame, "NO CAMERA", (100, 270), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
@@ -477,13 +477,11 @@ def update_frame():
             root.after(100, update_frame)
             return
 
-    # 2. UPDATE SENSOR UI
     try:
         current_dist = sensor.distance * 100
         update_distance_ui(current_dist)
     except: pass
 
-    # 3. GUI OVERLAYS
     cv2.putText(frame, f"STATUS: {system_state}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
 
     h, w, _ = frame.shape
@@ -492,7 +490,6 @@ def update_frame():
     cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), ROI_COLOR, 3) 
     roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
 
-    # 4. DETECTION LOGIC
     should_detect = (not is_gate_busy) or (system_state == "POST-ENTRY SCAN")
     
     if should_detect and system_state != "CLOSING GATE":
@@ -549,7 +546,6 @@ def update_frame():
         if not detected_box and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear(); first_sight_times.clear()
 
-    # 5. RESIZE AND DISPLAY
     win_w = video_frame_container.winfo_width()
     win_h = video_frame_container.winfo_height()
 
