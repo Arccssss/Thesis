@@ -308,9 +308,9 @@ def camera_loop():
                                             # Calculate Total Latency
                                             total_latency = (time.perf_counter() - t_start_process) * 1000
                                             
-                                            # === THE FIX IS HERE ===
-                                            # Old Call: log_event(..., total_latency, t_detect, t_ocr, 0) -> 7 Args (Wrong)
-                                            # New Call: log_event(..., t_detect, t_ocr, total_latency) -> 6 Args (Correct)
+                                            # === FIX IS HERE ===
+                                            # We are now sending EXACTLY 6 arguments:
+                                            # 1. Plate, 2. Name, 3. Status, 4. Det Time, 5. OCR Time, 6. Total Latency
                                             
                                             if most_common in authorized_plates:
                                                 row = auth_df[auth_df['Plate'] == most_common].iloc[0]
