@@ -189,9 +189,9 @@ def log_event(plate, name, status, det, ocr, total_lat):
                 "Faculty": "N/A", 
                 "Status": status,
                 "Timestamp": csv_timestamp, # Uses the EXACT same captured time
-                "Latency_Total_ms": f"{total_lat:.2f}",
-                "Det_ms": f"{det:.2f}",
-                "OCR_ms": f"{ocr:.2f}"
+                "Latency": f"{total_lat:.2f}",
+                "Det": f"{det:.2f}",
+                "OCR": f"{ocr:.2f}"
             })
     except Exception as e:
         print(f"❌ Log Error: {e}")
