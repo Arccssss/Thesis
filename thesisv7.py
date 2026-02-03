@@ -32,7 +32,7 @@ ABSENCE_RESET_TIME = 2.5
 
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
-SENSOR_POLL_RATE = 100    # Updated to 250ms as requested
+SENSOR_POLL_RATE = 100    # <--- CHANGED TO 100ms
 
 POST_ENTRY_DELAY = 0.5   
 EXIT_SCAN_COOLDOWN = 5.0 
@@ -355,7 +355,6 @@ def trigger_gate_sequence():
 def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
     
-    # Even if polling is 250ms, we update the logic here
     try:
         dist_cm = sensor.distance * 100
         
