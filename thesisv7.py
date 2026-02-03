@@ -119,7 +119,6 @@ for frame in (page_camera, page_logs, page_history):
 
 def show_frame(frame):
     frame.tkraise()
-    # Lift minimize button so it is never hidden
     try: btn_minimize.lift()
     except: pass
 
@@ -208,7 +207,7 @@ tree_history = create_treeview(page_history)
 
 tk.Button(page_history, text="Refresh Logs", command=lambda: load_history_data(), bg="#e0e0e0", relief="flat").pack(side="bottom", fill="x", pady=5, padx=10)
 
-# --- MINIMIZE BUTTON (Placed last to ensure it's on top) ---
+# --- MINIMIZE BUTTON ---
 btn_minimize = tk.Button(root, text=" — ", command=minimize_window, 
                         bg="#f0f0f0", font=("Arial", 14, "bold"), relief="flat", bd=1)
 btn_minimize.place(relx=1.0, x=-10, y=10, anchor="ne")
@@ -249,7 +248,7 @@ def update_distance_ui(dist_cm):
         lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
 def load_history_data():
-    """Load logs ensuring Headers match exact CSV format: Plate,Name,Faculty,Status,Timestamp,Latency,Det,OCR"""
+    """Robust History Loader - Handles corrupted files without crashing"""
     for i in tree_history.get_children(): 
         tree_history.delete(i)
         
@@ -259,7 +258,6 @@ def load_history_data():
     try:
         with open(LOG_FILE, 'r', encoding='utf-8') as f:
             reader_csv = csv.DictReader(f)
-            # Filter out empty rows just in case
             rows = [r for r in reader_csv if r]
             
             for row in reversed(rows):
@@ -269,17 +267,24 @@ def load_history_data():
                 except: 
                     short_ts = ts
                 
-                # Fetching using exact headers
-                plate = row.get('Plate', 'Unknown')
-                name = row.get('Name', 'Unknown')
-                
-                det = row.get('Det', '0')
-                ocr = row.get('OCR', '0') # Capitalized OCR per user request
-                latency = row.get('Latency', '0')
-                
-                perf_display = f"Det: {float(det):.0f}ms | OCR: {float(ocr):.0f}ms"
-                
+                # --- CRASH & UNKNOWN PROTECTION ---
+                # 1. Try capitalized 'Plate', then lowercase 'plate', then default
+                plate = row.get('Plate') or row.get('plate') or "Unknown"
+                name = row.get('Name') or row.get('name') or "Unknown"
                 status_txt = row.get('Status', '')
+
+                # 2. Safely convert numbers. If corrupt ('8p0.54'), use 0.0
+                try: det = float(row.get('Det') or row.get('det', 0))
+                except ValueError: det = 0.0
+
+                try: ocr = float(row.get('OCR') or row.get('ocr', 0))
+                except ValueError: ocr = 0.0
+
+                try: latency = float(row.get('Latency') or row.get('latency', 0))
+                except ValueError: latency = 0.0
+                # ----------------------------------
+                
+                perf_display = f"Det: {det:.0f}ms | OCR: {ocr:.0f}ms"
                 tag = "authorized" if "AUTHORIZED" in status_txt else "unauthorized"
                 
                 tree_history.insert("", "end", values=(
@@ -287,7 +292,7 @@ def load_history_data():
                     plate, 
                     name, 
                     status_txt, 
-                    f"{float(latency):.2f}s", 
+                    f"{latency:.2f}s", 
                     perf_display
                 ), tags=(tag,))
                 
@@ -301,15 +306,12 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
     perf_display = f"Det: {det_time:.0f}ms | OCR: {ocr_time:.0f}ms"
     
     try:
-        # GUI Update
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         tree.insert("", 0, values=(ts_s, plate, name, status, f"{latency:.2f}s", perf_display), tags=(tag,))
         
-        # CSV Update
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
         
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            # Enforcing exact requested headers
             fieldnames = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             
@@ -327,7 +329,6 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
                 "OCR": f"{ocr_time:.2f}"
             })
         
-        # Refresh history if user is looking at it
         if page_history.winfo_ismapped():
             load_history_data()
         
@@ -390,12 +391,10 @@ def smart_gate_check():
     
     try:
         dist_cm = sensor.distance * 100
-        
-        # Update UI here too (redundancy ensures it updates if camera is slow)
         update_distance_ui(dist_cm)
 
         if system_state == "POST-ENTRY SCAN": 
-            return # Don't run gate logic, but UI update happened above
+            return 
 
         if is_gate_busy and system_state != "CLOSING GATE":
             if not vehicle_confirmed:
@@ -495,7 +494,6 @@ def update_frame():
                                 most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
                                     
-                                    # LATENCY = DETECTION + OCR TIME (in seconds)
                                     latency = (t_detect + t_ocr_ms) / 1000.0
                                     
                                     if most_common in authorized_plates:
