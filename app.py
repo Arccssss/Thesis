@@ -368,35 +368,33 @@ def api_logs():
 def api_history():
     history = []
     
-    # 1. Safety Check: Does file exist?
     if not os.path.exists(LOG_FILE):
         return jsonify([])
 
     try:
         with open(LOG_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-            # 2. Check for empty file
             f.seek(0, os.SEEK_END)
             if f.tell() == 0:
                 return jsonify([])
             f.seek(0)
 
-            # 3. Read the CSV
             reader = csv.DictReader(f)
             
-            # 4. Extract ONLY the columns you want
-            # We use .get() so if a column is missing, it returns "N/A" instead of crashing
+            # Read all rows
             raw_data = list(reader)
             
             for row in reversed(raw_data):
-                # Skip empty rows
                 if not row.get('Plate'): continue
                 
-                # Create a simple object with only 3-4 fields
+                # === THE FIX IS HERE ===
+                # We try to get 'Latency_Total_ms'. 
+                # If it doesn't exist (old file), we default to '0'.
                 clean_entry = {
-                    "Timestamp": row.get("Timestamp", ""),
-                    "Plate":     row.get("Plate", "Unknown"),
-                    "Status":    row.get("Status", "--"),
-                    "Name":      row.get("Name", "") # Optional: Keeps the UI looking nice
+                    "Timestamp":        row.get("Timestamp", ""),
+                    "Plate":            row.get("Plate", "Unknown"),
+                    "Status":           row.get("Status", "--"),
+                    "Name":             row.get("Name", ""),
+                    "Latency_Total_ms": row.get("Latency_Total_ms", "0") 
                 }
                 history.append(clean_entry)
 
@@ -404,7 +402,6 @@ def api_history():
         print(f"⚠️ HISTORY ERROR: {e}", flush=True)
         return jsonify([])
         
-    # Return last 50 entries
     return jsonify(history[:50])
 
 @app.route('/api/reset', methods=['POST'])
