@@ -520,18 +520,30 @@ def update_frame():
                                 most_common, _ = Counter(scan_buffer).most_common(1)[0]
                                 
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
-                                    # --- CALCULATE TOTAL LATENCY ---
-                                    # (Current Time - Start Time) * 1000 to get ms
-                                    total_latency = (time.perf_counter() - t_start_process) * 1000
-                                    
-                                    if most_common in authorized_plates:
-                                        row = auth_df[auth_df['Plate'] == most_common].iloc[0]
-                                        log_event(most_common, row['Name'], "AUTHORIZED", t_detect, t_ocr, total_latency)
-                                    else:
-                                        log_event(most_common, "Unknown", "UNAUTHORIZED", t_detect, t_ocr, total_latency)
-                                    
-                                    logged_vehicles[most_common] = current_time
-                                    scan_buffer.clear()
+                                        # --- CALCULATE TOTAL LATENCY ---
+                                        total_latency = (time.perf_counter() - t_start_process) * 1000
+                                        
+                                        # Prevent "0ms" if calculation was too fast
+                                        if t_detect == 0: t_detect = 10 
+                                        if t_ocr == 0: t_ocr = 10 
+                                        
+                                        if most_common in authorized_plates:
+                                            # 1. Get row from database
+                                            row = auth_df[auth_df['Plate'] == most_common].iloc[0]
+                                            
+                                            # 2. Get Faculty Safely (New Step)
+                                            user_faculty = row.get('Faculty', 'N/A')
+                                            if pd.isna(user_faculty): user_faculty = "N/A"
+
+                                            # 3. Call log_event with ALL 7 ARGUMENTS
+                                            # args: plate, name, faculty, status, det, ocr, latency
+                                            log_event(most_common, row['Name'], user_faculty, "AUTHORIZED", t_detect, t_ocr, total_latency)
+                                        else:
+                                            # Unauthorized users get "N/A" for faculty
+                                            log_event(most_common, "Unknown", "N/A", "UNAUTHORIZED", t_detect, t_ocr, total_latency)
+                                        
+                                        logged_vehicles[most_common] = current_time
+                                        scan_buffer.clear()
 
         if not detected and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear()
