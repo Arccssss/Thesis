@@ -168,6 +168,12 @@ create_header(page_camera, "SAVES AI", None,
 
 video_frame_container = tk.Frame(page_camera, bg="#ff4d4d", padx=2, pady=2)
 video_frame_container.pack(fill="both", expand=True, padx=10, pady=5)
+
+# --- CRITICAL FIX START ---
+# Prevents the container from resizing to fit the image, stopping the growth loop
+video_frame_container.pack_propagate(False) 
+# --- CRITICAL FIX END ---
+
 video_label = tk.Label(video_frame_container, bg="black")
 video_label.pack(fill="both", expand=True)
 
