@@ -361,33 +361,44 @@ def log_event(plate, name, faculty, status, det, ocr, total_lat):
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
             headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
             writer = csv.DictWriter(f, fieldnames=headers)
-            
-            if not file_exists:
-                writer.writeheader()
-                
+            if not file_exists: writer.writeheader()
             writer.writerow({
-                "Plate": plate,
-                "Name": name,
-                "Faculty": faculty,
+                "Plate": plate, 
+                "Name": name, 
+                "Faculty": faculty, 
                 "Status": status,
-                "Timestamp": csv_timestamp,
+                "Timestamp": csv_timestamp, 
                 "Latency": f"{total_lat:.2f}",
-                "Det": f"{det:.2f}",
+                "Det": f"{det:.2f}", 
                 "OCR": f"{ocr:.2f}"
             })
-    except Exception as e:
-        print(f"❌ Log Error: {e}")
+    except Exception as e: print(f"❌ Log Error: {e}")
 
-    # 3. Update Tkinter UI Immediately
+    # 3. Update UI (Both Current Logs AND History)
     try:
         metrics = f"Det:{det:.0f} | OCR:{ocr:.0f}"
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         
+        # --- UPDATE CURRENT SESSION LOGS (This was missing) ---
+        # Note: Your current session table 'tree' does not have a 'Faculty' column defined in your code
+        # so we skip 'faculty' here to prevent a crash.
+        tree.insert("", 0, values=(
+            display_time, 
+            plate, 
+            name, 
+            status, 
+            f"{total_lat:.0f} ms", 
+            metrics
+        ), tags=(tag,))
+
+        # --- UPDATE HISTORY LOGS ---
+        # If your history table HAS 'Faculty', include it. If not, remove it.
+        # Based on your previous code, 'tree_history' might accept it.
+        # Ensure the number of values matches the columns defined for tree_history.
         tree_history.insert("", 0, values=(
             display_time, 
             plate, 
             name, 
-            faculty, 
             status, 
             f"{total_lat:.0f} ms", 
             metrics
@@ -396,19 +407,15 @@ def log_event(plate, name, faculty, status, det, ocr, total_lat):
     except Exception as e:
         print(f"UI Update Error: {e}")
 
-    # === 4. STATE MACHINE TRIGGER (THIS WAS MISSING) ===
+    # 4. State Machine Trigger
     if status == "AUTHORIZED":
-        # Open the gate if we are in a valid state to do so
         if current_state == STATE_IDLE or current_state == STATE_POST_ENTRY:
              transition_to(STATE_OPENING)
     else:
-        # Handle UNAUTHORIZED (Blink Red LED / Buzzer)
         if current_state == STATE_IDLE:
-            print(f"⛔ Unauthorized Access Attempt: {plate}")
+            print(f"⛔ Unauthorized: {plate}")
             led_red_unauth.blink(on_time=0.1, off_time=0.1, n=3, background=True)
             buzzer.beep(on_time=0.1, off_time=0.1, n=3, background=True)
-            
-            # Reset LED to solid ON after 1 second
             root.after(1000, lambda: led_red_unauth.on() if current_state == STATE_IDLE else None)
 
 def trigger_authorized_event():
