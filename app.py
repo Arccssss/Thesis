@@ -260,7 +260,8 @@ def camera_loop():
             t_start_process = time.perf_counter()
             
             # Note: Flask serves JPEGs which are BGR, so no need to convert to RGB for display
-            
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
             h, w, _ = frame.shape
             roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
             roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)

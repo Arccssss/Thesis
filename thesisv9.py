@@ -469,8 +469,8 @@ def update_frame():
     try: frame = picam2.capture_array()
     except: return root.after(100, update_frame)
 
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    
+    # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    frame_rgb = frame
     h, w, _ = frame_rgb.shape
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
     roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
