@@ -349,21 +349,18 @@ def fsm_update_loop():
 # ==========================================
 #           VISION & LOGGING
 # ==========================================
-def log_event(plate, name, status, det, ocr, total_lat):
-    ts = datetime.now().strftime("%H:%M:%S")
-    
-    # Display breakdown in the GUI (Det + OCR + Total)
-    perf = f"Det:{det:.0f}ms | OCR:{ocr:.0f}ms"
-    
-    tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
-    # Show the TOTAL latency in the "Latency" column
-    tree.insert("", 0, values=(ts, plate, name, status, f"{total_lat:.0f} ms", perf), tags=(tag,))
-    
-    # Save to CSV
+def log_event(plate, name, faculty, status, det, ocr, total_lat):
+    # 1. Capture Time
+    now = datetime.now()
+    display_time = now.strftime("%H:%M:%S")      # For the screen
+    csv_timestamp = now.strftime("%Y-%m-%d %H:%M:%S") # For the file
+
+    # 2. Save to CSV
     try:
         file_exists = os.path.isfile(LOG_FILE)
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency_Total_ms", "Det_ms", "OCR_ms"]
+            # headers MUST match your Server version exactly
+            headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
             writer = csv.DictWriter(f, fieldnames=headers)
             
             if not file_exists:
@@ -372,28 +369,35 @@ def log_event(plate, name, status, det, ocr, total_lat):
             writer.writerow({
                 "Plate": plate,
                 "Name": name,
-                "Faculty": "N/A", 
+                "Faculty": faculty,
                 "Status": status,
-                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Latency_Total_ms": f"{total_lat:.2f}",
-                "Det_ms": f"{det:.2f}",
-                "OCR_ms": f"{ocr:.2f}"
+                "Timestamp": csv_timestamp,
+                "Latency": f"{total_lat:.2f}",
+                "Det": f"{det:.2f}",
+                "OCR": f"{ocr:.2f}"
             })
     except Exception as e:
         print(f"❌ Log Error: {e}")
 
-    if status == "AUTHORIZED":
-        trigger_authorized_event()
-    else:
-        # --- FIX: Handle Unauthorized Alerts Correctly ---
-        if current_state == STATE_IDLE:
-            # 1. Blink FAST (0.1s) instead of default slow (1s)
-            led_red_unauth.blink(on_time=0.1, off_time=0.1, n=3, background=True)
-            buzzer.beep(on_time=0.1, off_time=0.1, n=3, background=True)
-            
-            # 2. Schedule Red LED to turn back ON after 700ms (0.2s * 3 = 600ms + buffer)
-            # We strictly check if we are still in IDLE to avoid turning Red on if the gate opened.
-            root.after(700, lambda: led_red_unauth.on() if current_state == STATE_IDLE else None)
+    # 3. Update Tkinter UI Immediately
+    # This makes the new log appear on the screen instantly
+    try:
+        metrics = f"Det:{det:.0f} | OCR:{ocr:.0f}"
+        tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
+        
+        # Insert at the TOP of the list (index 0)
+        tree_history.insert("", 0, values=(
+            display_time, 
+            plate, 
+            name, 
+            faculty, 
+            status, 
+            f"{total_lat:.0f} ms", 
+            metrics
+        ), tags=(tag,))
+        
+    except Exception as e:
+        print(f"UI Update Error: {e}")
 
 def trigger_authorized_event():
     # Only act if IDLE or we are looking for the "Next Vehicle" in POST_ENTRY

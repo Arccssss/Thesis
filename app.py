@@ -152,19 +152,17 @@ def transition_to(new_state):
         led_green_auth.off(); led_red_unauth.on()
         # Non-blocking delay handled in FSM loop
 
-def log_event(plate, name, status, det, ocr, total_lat):
+def log_event(plate, name, faculty, status, det, ocr, total_lat):
     global session_logs
     
-    # 1. Capture Time ONCE (So Web and CSV match exactly)
     now = datetime.now()
-    display_time = now.strftime("%H:%M:%S")          # Format for Phone Screen (e.g., 14:30:05)
-    csv_timestamp = now.strftime("%Y-%m-%d %H:%M:%S") # Format for CSV File (e.g., 2026-02-03 14:30:05)
+    display_time = now.strftime("%H:%M:%S")
+    csv_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 2. Update In-Memory List (Web UI)
+    # Update In-Memory List (Web UI)
     perf = f"Det:{det:.0f}ms | OCR:{ocr:.0f}ms"
-    
     log_entry = {
-        "time": display_time, # Uses the captured time
+        "time": display_time,
         "plate": plate,
         "name": name,
         "status": status,
@@ -173,11 +171,12 @@ def log_event(plate, name, status, det, ocr, total_lat):
     }
     session_logs.insert(0, log_entry)
     
-    # 3. Save to CSV
+    # Save to CSV
     try:
         file_exists = os.path.isfile(LOG_FILE)
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency_Total_ms", "Det_ms", "OCR_ms"]
+            # Ensure headers match your actual CSV structure
+            headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
             writer = csv.DictWriter(f, fieldnames=headers)
             
             if not file_exists:
@@ -186,9 +185,9 @@ def log_event(plate, name, status, det, ocr, total_lat):
             writer.writerow({
                 "Plate": plate,
                 "Name": name,
-                "Faculty": "N/A", 
+                "Faculty": faculty,  # <--- NOW USES THE REAL FACULTY
                 "Status": status,
-                "Timestamp": csv_timestamp, # Uses the EXACT same captured time
+                "Timestamp": csv_timestamp,
                 "Latency": f"{total_lat:.2f}",
                 "Det": f"{det:.2f}",
                 "OCR": f"{ocr:.2f}"
@@ -196,21 +195,16 @@ def log_event(plate, name, status, det, ocr, total_lat):
     except Exception as e:
         print(f"❌ Log Error: {e}")
 
-    # 4. Hardware Actions
+    # Hardware Actions
     if status == "AUTHORIZED":
         if current_state == STATE_IDLE or current_state == STATE_POST_ENTRY:
              transition_to(STATE_OPENING)
     else:
-        # Unauthorized Alert (Server Compatible)
         if current_state == STATE_IDLE:
             led_red_unauth.blink(on_time=0.1, off_time=0.1, n=3, background=True)
             buzzer.beep(on_time=0.1, off_time=0.1, n=3, background=True)
-            
-            # Reset LED after 0.7s
             def reset_led():
-                if current_state == STATE_IDLE:
-                    led_red_unauth.on()
-
+                if current_state == STATE_IDLE: led_red_unauth.on()
             threading.Timer(0.7, reset_led).start()
 
 # ==========================================
@@ -309,11 +303,22 @@ def camera_loop():
                                             # Calculate Total Latency
                                             total_latency = (time.perf_counter() - t_start_process) * 1000
                                             
+                                            print(f"⏱️ TIMING DEBUG: Det={t_detect:.2f}ms | OCR={t_ocr:.2f}ms | Total={total_latency:.2f}ms", flush=True)
+
                                             if most_common in authorized_plates:
+                                                # Fetch the row for this plate
                                                 row = auth_df[auth_df['Plate'] == most_common].iloc[0]
-                                                log_event(most_common, row['Name'], "AUTHORIZED", t_detect, t_ocr, total_latency)
+                                                
+                                                # === GET FACULTY SAFELY ===
+                                                # If 'Faculty' column is empty or missing, default to "N/A"
+                                                user_faculty = row.get('Faculty', 'N/A')
+                                                if pd.isna(user_faculty): user_faculty = "N/A"
+
+                                                # Pass user_faculty to log_event
+                                                log_event(most_common, row['Name'], user_faculty, "AUTHORIZED", t_detect, t_ocr, total_latency)
                                             else:
-                                                log_event(most_common, "Unknown", "UNAUTHORIZED", t_detect, t_ocr, total_latency)
+                                                # Unauthorized users have no faculty
+                                                log_event(most_common, "Unknown", "N/A", "UNAUTHORIZED", t_detect, t_ocr, total_latency)
                                             
                                             logged_vehicles[most_common] = current_time
                                             scan_buffer.clear()
