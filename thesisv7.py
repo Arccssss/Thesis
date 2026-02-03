@@ -44,8 +44,8 @@ GATE_PIN_2 = 27
 US_TRIG_PIN = 23 
 US_ECHO_PIN = 24 
 BUZZER_PIN = 22
-LED_OPEN_PIN = 5   
-LED_CLOSE_PIN = 6   
+LED_OPEN_PIN = 5   # GREEN LED (Authorized)
+LED_CLOSE_PIN = 6  # RED LED (Unauthorized/Stop)
 
 # ==========================================
 #          HARDWARE INITIALIZATION
@@ -55,10 +55,14 @@ try:
     gate_p2 = OutputDevice(GATE_PIN_2, active_high=True, initial_value=True)
     sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.5, queue_len=3)
     buzzer = Buzzer(BUZZER_PIN)
-    led_open = LED(LED_OPEN_PIN)
-    led_close = LED(LED_CLOSE_PIN)
-    led_open.off()
-    led_close.on()
+    
+    # Aliased for clarity in logic
+    led_green_auth = LED(LED_OPEN_PIN)
+    led_red_unauth = LED(LED_CLOSE_PIN)
+    
+    # Default State: Red ON (Stop), Green OFF
+    led_green_auth.off()
+    led_red_unauth.on()
     
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1280, 720)})
@@ -73,13 +77,14 @@ except Exception as e:
         def on(self): pass
         def off(self): pass
         def beep(self, on_time=0.1, off_time=0.1, n=1): pass
+        def blink(self, on_time=0.1, off_time=0.1, n=1, background=True): pass
         def close(self): pass
         @property
         def value(self): return 0
         @property
         def distance(self): return 1.5 
     gate_p1 = gate_p2 = sensor = buzzer = DummyDev()
-    led_open = led_close = DummyDev()
+    led_green_auth = led_red_unauth = DummyDev()
     picam2 = None 
 
 # ==========================================
@@ -95,7 +100,7 @@ root.bind("<Escape>", lambda event: root.attributes("-fullscreen", True))
 def close_application():
     if picam2: picam2.stop()
     gate_p1.close(); gate_p2.on() 
-    led_open.off(); led_close.off()
+    led_green_auth.off(); led_red_unauth.off()
     root.destroy(); sys.exit(0)
 
 def minimize_window(): 
@@ -248,7 +253,7 @@ def update_distance_ui(dist_cm):
         lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
 def load_history_data():
-    """Robust History Loader - Handles corrupted files without crashing"""
+    """Robust History Loader"""
     for i in tree_history.get_children(): 
         tree_history.delete(i)
         
@@ -267,13 +272,10 @@ def load_history_data():
                 except: 
                     short_ts = ts
                 
-                # --- CRASH & UNKNOWN PROTECTION ---
-                # 1. Try capitalized 'Plate', then lowercase 'plate', then default
                 plate = row.get('Plate') or row.get('plate') or "Unknown"
                 name = row.get('Name') or row.get('name') or "Unknown"
                 status_txt = row.get('Status', '')
 
-                # 2. Safely convert numbers. If corrupt ('8p0.54'), use 0.0
                 try: det = float(row.get('Det') or row.get('det', 0))
                 except ValueError: det = 0.0
 
@@ -282,7 +284,6 @@ def load_history_data():
 
                 try: latency = float(row.get('Latency') or row.get('latency', 0))
                 except ValueError: latency = 0.0
-                # ----------------------------------
                 
                 perf_display = f"Det: {det:.0f}ms | OCR: {ocr:.0f}ms"
                 tag = "authorized" if "AUTHORIZED" in status_txt else "unauthorized"
@@ -309,6 +310,7 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         tree.insert("", 0, values=(ts_s, plate, name, status, f"{latency:.2f}s", perf_display), tags=(tag,))
         
+        # --- AUTO-CREATE FILE LOGIC ---
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
         
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
@@ -335,9 +337,21 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
         if status == "AUTHORIZED": 
             trigger_gate_sequence()
         else:
+            # --- UNAUTHORIZED SEQUENCE (LEDs) ---
             set_status("UNAUTHORIZED DETECTED", "red")
+            
+            # Red Blinks, Green OFF
+            led_green_auth.off()
+            led_red_unauth.blink(on_time=0.1, off_time=0.1, n=5, background=True)
             buzzer.beep(on_time=0.1, off_time=0.05, n=4)
-            root.after(3000, lambda: set_status("SCANNING", "black") if not is_gate_busy else None)
+            
+            # Helper to reset LED to solid Red (Stop) after warning if gate not busy
+            def restore_unauth_led():
+                if not is_gate_busy:
+                     set_status("SCANNING", "black")
+                     led_red_unauth.on() # Back to solid Red
+
+            root.after(3000, restore_unauth_led)
             
     except Exception as e: 
         print(f"Log Error: {e}")
@@ -349,14 +363,22 @@ def preprocess_plate(img):
 
 def reset_gate_system():
     global is_gate_busy, vehicle_entry_start_time, vehicle_confirmed
-    gate_p1.off(); gate_p2.on(); led_open.off(); led_close.on()
+    gate_p1.off(); gate_p2.on()
+    
+    # LED RESET: Red ON (Stop), Green OFF
+    led_green_auth.off(); led_red_unauth.on()
+    
     is_gate_busy = vehicle_confirmed = False
     vehicle_entry_start_time = None
     set_status("SCANNING", "black")
 
 def execute_close_action():
     set_status("CLOSING GATE", "orange")
-    gate_p1.off(); gate_p2.on(); led_open.off(); led_close.on()
+    gate_p1.off(); gate_p2.on()
+    
+    # LEDs during closing: Red ON, Green OFF
+    led_green_auth.off(); led_red_unauth.on()
+    
     root.after(GATE_ACTION_TIME, reset_gate_system)
 
 # ================= GATE LOGIC =================
@@ -365,10 +387,13 @@ def trigger_gate_sequence():
     
     if is_gate_busy and system_state == "POST-ENTRY SCAN":
         set_status("NEXT VEHICLE DETECTED", "green")
+        
+        # Blink Green to acknowledge next vehicle
         for _ in range(2):
-            led_open.on(); buzzer.on(); time.sleep(0.1)
-            led_open.off(); buzzer.off(); time.sleep(0.1)
-        led_open.on()
+            led_green_auth.on(); buzzer.on(); time.sleep(0.1)
+            led_green_auth.off(); buzzer.off(); time.sleep(0.1)
+        led_green_auth.on() # Keep Green ON
+        
         vehicle_confirmed = False
         vehicle_entry_start_time = None
         root.after(100, smart_gate_check)
@@ -379,11 +404,17 @@ def trigger_gate_sequence():
     is_gate_busy = True
     set_status("AUTHORIZED: OPENING", "green")
     
+    # Authorized Warning (Green Blinks)
     for _ in range(2):
-        led_open.on(); buzzer.on(); time.sleep(0.1)
-        led_open.off(); buzzer.off(); time.sleep(0.1)
+        led_green_auth.on(); buzzer.on(); time.sleep(0.1)
+        led_green_auth.off(); buzzer.off(); time.sleep(0.1)
 
-    gate_p1.on(); gate_p2.off(); led_open.on(); led_close.off()
+    gate_p1.on(); gate_p2.off()
+    
+    # --- AUTHORIZED STATE (LEDs) ---
+    led_green_auth.on()   # Green ON (Go)
+    led_red_unauth.off()  # Red OFF
+    
     root.after(GATE_ACTION_TIME, lambda: root.after(100, smart_gate_check))
 
 def smart_gate_check():
