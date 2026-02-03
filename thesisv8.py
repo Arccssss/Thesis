@@ -349,15 +349,32 @@ def preprocess_plate(img):
     return thresh
 
 def reset_gate_system():
-    global is_gate_busy, vehicle_confirmed, accumulated_presence, gate_open_start_time
-    gate_p1.off(); gate_p2.on()
-    led_green_auth.off(); led_red_unauth.on()
-    
-    # [CRITICAL] FULL RESET OF ALL VARIABLES
+    global is_gate_busy, vehicle_confirmed, accumulated_presence
+    global gate_open_start_time, system_state, detection_start_time
+    global scan_buffer, first_sight_times, last_plate_seen_time
+
+    print("🔄 FULL SYSTEM RESET")
+
+    # Hardware reset
+    gate_p1.off()
+    gate_p2.on()
+    led_green_auth.off()
+    led_red_unauth.on()
+
+    # Gate logic reset
     is_gate_busy = False
     vehicle_confirmed = False
-    accumulated_presence = 0.0 
+    accumulated_presence = 0.0
     gate_open_start_time = None
+
+    # Vision & detection reset
+    detection_start_time = None
+    last_plate_seen_time = 0
+    scan_buffer.clear()
+    first_sight_times.clear()
+
+    # IMPORTANT: restore system state
+    system_state = "SCANNING"
     set_status("SCANNING", "black")
 
 def execute_close_action():
@@ -370,6 +387,9 @@ def execute_close_action():
 def trigger_gate_sequence():
     global is_gate_busy, vehicle_confirmed, system_state, accumulated_presence, gate_open_start_time
     
+    if is_gate_busy and system_state != "POST-ENTRY SCAN":
+        return
+
     if is_gate_busy and system_state == "POST-ENTRY SCAN":
         set_status("NEXT VEHICLE DETECTED", "green")
         for _ in range(2):
@@ -406,7 +426,7 @@ def trigger_gate_sequence():
     gate_p1.on(); gate_p2.off()
 
 def smart_gate_check():
-    global vehicle_confirmed, system_state, accumulated_presence
+    global is_gate_busy, vehicle_confirmed, system_state, accumulated_presence, gate_open_start_time
     
     try:
         dist_cm = sensor.distance * 100
@@ -416,7 +436,9 @@ def smart_gate_check():
         if is_gate_busy:
             print(f"DEBUG: Dist={dist_cm:.1f}cm | Acc={accumulated_presence:.2f}s | Confirm={vehicle_confirmed}")
 
-        if system_state == "POST-ENTRY SCAN": return 
+        if system_state == "POST-ENTRY SCAN":
+            root.after(SENSOR_POLL_RATE, smart_gate_check)
+            return 
 
         if is_gate_busy and system_state != "CLOSING GATE":
             
