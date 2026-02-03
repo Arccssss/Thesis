@@ -117,8 +117,9 @@ def minimize_window():
 
 style = ttk.Style()
 style.theme_use("clam")
-style.configure("Treeview.Heading", background="#cccccc", foreground="white", font=("Arial", 10, "bold"), relief="flat")
-style.configure("Treeview", font=("Arial", 9), rowheight=25)
+# SCALED: Increased Treeview font size for easier reading
+style.configure("Treeview.Heading", background="#cccccc", foreground="white", font=("Arial", 14, "bold"), relief="flat")
+style.configure("Treeview", font=("Arial", 12), rowheight=35)
 
 container = tk.Frame(root, bg="white")
 container.pack(fill="both", expand=True)
@@ -136,38 +137,42 @@ def show_frame(frame):
     except: pass
 
 def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=None):
-    header_frame = tk.Frame(parent, bg="white", pady=5)
-    header_frame.pack(fill="x", padx=10)
+    # SCALED: Increased padding (pady=15) to make header taller
+    header_frame = tk.Frame(parent, bg="white", pady=15)
+    header_frame.pack(fill="x", padx=15)
     header_frame.columnconfigure(0, weight=1)
     header_frame.columnconfigure(1, weight=4)
     header_frame.columnconfigure(2, weight=1)
 
+    # SCALED: Larger button font (size 12) and padding
+    btn_font = ("Arial", 12, "bold")
+    
     if left_btn:
         bg_c = "#ffcccc" if "Shutdown" in left_btn['text'] else "#e0e0e0"
         fg_c = "red" if "Shutdown" in left_btn['text'] else "#555"
         tk.Button(header_frame, text=left_btn['text'], command=left_btn['cmd'],
-                  bg=bg_c, fg=fg_c, font=("Arial", 9, "bold"), relief="flat", padx=10).grid(row=0, column=0, sticky="w")
+                  bg=bg_c, fg=fg_c, font=btn_font, relief="flat", padx=15, pady=5).grid(row=0, column=0, sticky="w")
 
         if "Shutdown" in left_btn['text']:
              tk.Button(header_frame, text="Reset", command=lambda: transition_to(STATE_IDLE),
-                       bg="#e0e0e0", fg="#555", font=("Arial", 9, "bold"), relief="flat", padx=10).grid(row=0, column=0, sticky="w", padx=(100, 0))
+                       bg="#e0e0e0", fg="#555", font=btn_font, relief="flat", padx=15, pady=5).grid(row=0, column=0, sticky="w", padx=(120, 0))
 
     title_c = tk.Frame(header_frame, bg="white")
     title_c.grid(row=0, column=1)
-    tk.Label(title_c, text=title_text, font=("Helvetica", 18, "bold"), bg="white").pack()
-    if sub_text: tk.Label(title_c, text=sub_text, font=("Helvetica", 10), bg="white", fg="#555").pack()
+    # SCALED: Much larger Title Font (Size 24)
+    tk.Label(title_c, text=title_text, font=("Helvetica", 24, "bold"), bg="white").pack()
+    if sub_text: tk.Label(title_c, text=sub_text, font=("Helvetica", 14), bg="white", fg="#555").pack()
 
     if right_btn:
         tk.Button(header_frame, text=right_btn['text'], command=right_btn['cmd'],
-                  bg="#e0e0e0", fg="#555", font=("Arial", 9, "bold"), relief="flat", padx=10).grid(row=0, column=2, sticky="e")
+                  bg="#e0e0e0", fg="#555", font=btn_font, relief="flat", padx=15, pady=5).grid(row=0, column=2, sticky="e")
 
 # --- CAMERA PAGE UI ---
 create_header(page_camera, "SAVES AI", None,
               left_btn={'text': "Shutdown", 'cmd': close_application},
-              right_btn={'text': "Current Logs ➜", 'cmd': lambda: show_frame(page_logs)})
+              right_btn={'text': "Logs ➜", 'cmd': lambda: show_frame(page_logs)})
 
-# FIX: Removed padding (padx=0, pady=0) to let camera fill available space
-# FIX: Set bg="black" to create cinema bars instead of white gaps
+# Camera Container (Black Background, No Padding)
 video_frame_container = tk.Frame(page_camera, bg="black")
 video_frame_container.pack(fill="both", expand=True, padx=0, pady=0)
 video_frame_container.pack_propagate(False)
@@ -175,12 +180,16 @@ video_frame_container.pack_propagate(False)
 video_label = tk.Label(video_frame_container, bg="black")
 video_label.pack(fill="both", expand=True)
 
+# SCALED: Larger Footer/Status area
 status_frame = tk.Frame(page_camera, bg="white")
-status_frame.pack(fill="x", side="bottom", pady=5)
-lbl_status = tk.Label(status_frame, text="IDLE", font=("Arial", 11, "bold"), bg="white", fg="black")
-lbl_status.pack(side="left", padx=10)
-lbl_dist = tk.Label(status_frame, text="DIST: -- cm", font=("Arial", 11), bg="white", fg="black")
-lbl_dist.pack(side="right", padx=10)
+status_frame.pack(fill="x", side="bottom", pady=15) # More bottom padding
+
+# SCALED: Larger Status Fonts (Size 16)
+lbl_status = tk.Label(status_frame, text="IDLE", font=("Arial", 16, "bold"), bg="white", fg="black")
+lbl_status.pack(side="left", padx=20)
+
+lbl_dist = tk.Label(status_frame, text="DIST: -- cm", font=("Arial", 16), bg="white", fg="black")
+lbl_dist.pack(side="right", padx=20)
 
 # --- LOGS UI ---
 cols = ("Time", "Plate", "Name", "Status", "Latency", "Metrics")
@@ -192,7 +201,7 @@ def create_treeview(parent):
     t.configure(yscrollcommand=sc.set)
     sc.pack(side="right", fill="y")
     t.pack(side="left", fill="both", expand=True)
-    for c in cols: t.heading(c, text=c); t.column(c, anchor="center", width=90)
+    for c in cols: t.heading(c, text=c); t.column(c, anchor="center", width=110)
     t.tag_configure("authorized", foreground="green")
     t.tag_configure("unauthorized", foreground="red")
     return t
@@ -334,9 +343,6 @@ def fsm_update_loop():
         
         if elapsed >= EXIT_SCAN_COOLDOWN:
             transition_to(STATE_CLOSING)
-
-        # Note: "Next Vehicle" logic is handled in `trigger_authorized_event`
-        # which is called by the camera loop
 
     root.after(SENSOR_POLL_RATE, fsm_update_loop)
 
