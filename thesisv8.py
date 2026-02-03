@@ -22,8 +22,8 @@ from picamera2 import Picamera2
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5  
-SCAN_BUFFER_LEN = 9  
-CONFIDENCE_THRESHOLD = 4
+SCAN_BUFFER_LEN = 5
+CONFIDENCE_THRESHOLD = 2
 
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5 
 ROI_COLOR = (0, 255, 0) 
@@ -44,8 +44,8 @@ GATE_PIN_2 = 27
 US_TRIG_PIN = 23 
 US_ECHO_PIN = 24 
 BUZZER_PIN = 22
-LED_OPEN_PIN = 5   # GREEN LED (Authorized/Go)
-LED_CLOSE_PIN = 6  # RED LED (Unauthorized/Stop)
+LED_OPEN_PIN = 5   # GREEN (Authorized/Go)
+LED_CLOSE_PIN = 6  # RED (Unauthorized/Stop)
 
 # ==========================================
 #          HARDWARE INITIALIZATION
@@ -56,7 +56,7 @@ try:
     sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.5, queue_len=3)
     buzzer = Buzzer(BUZZER_PIN)
     
-    # Aliased for clarity in logic
+    # LED Aliases
     led_green_auth = LED(LED_OPEN_PIN)
     led_red_unauth = LED(LED_CLOSE_PIN)
     
@@ -345,11 +345,10 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
             led_red_unauth.blink(on_time=0.1, off_time=0.1, n=5, background=True)
             buzzer.beep(on_time=0.1, off_time=0.05, n=4)
             
-            # Helper to reset LED to solid Red (Stop) after warning if gate not busy
             def restore_unauth_led():
                 if not is_gate_busy:
                      set_status("SCANNING", "black")
-                     led_red_unauth.on() # Back to solid Red
+                     led_red_unauth.on() 
 
             root.after(3000, restore_unauth_led)
             
@@ -365,7 +364,7 @@ def reset_gate_system():
     global is_gate_busy, vehicle_entry_start_time, vehicle_confirmed
     gate_p1.off(); gate_p2.on()
     
-    # LED RESET: Red ON (Stop), Green OFF
+    # RESET: Red ON (Stop), Green OFF
     led_green_auth.off(); led_red_unauth.on()
     
     is_gate_busy = vehicle_confirmed = False
@@ -376,7 +375,7 @@ def execute_close_action():
     set_status("CLOSING GATE", "orange")
     gate_p1.off(); gate_p2.on()
     
-    # LEDs during closing: Red ON, Green OFF
+    # CLOSING: Red ON, Green OFF
     led_green_auth.off(); led_red_unauth.on()
     
     root.after(GATE_ACTION_TIME, reset_gate_system)
@@ -388,14 +387,13 @@ def trigger_gate_sequence():
     if is_gate_busy and system_state == "POST-ENTRY SCAN":
         set_status("NEXT VEHICLE DETECTED", "green")
         
-        # Blink Green to acknowledge next vehicle
+        # Blink Green to acknowledge
         for _ in range(2):
             led_green_auth.on(); buzzer.on(); time.sleep(0.1)
             led_green_auth.off(); buzzer.off(); time.sleep(0.1)
         
-        # --- KEY CHANGE: Return to STOP State (Red ON, Green OFF) ---
-        # This forces the driver to wait out the remaining countdown
-        led_green_auth.off()
+        # STOP state (Next vehicle must wait)
+        led_green_auth.off() 
         led_red_unauth.on()
         
         vehicle_confirmed = False
@@ -415,9 +413,9 @@ def trigger_gate_sequence():
 
     gate_p1.on(); gate_p2.off()
     
-    # --- AUTHORIZED STATE (LEDs) ---
-    led_green_auth.on()   # Green ON (Go)
-    led_red_unauth.off()  # Red OFF
+    # --- AUTHORIZATION STATE: GREEN ON, RED OFF ---
+    led_green_auth.on()   
+    led_red_unauth.off()  
     
     root.after(GATE_ACTION_TIME, lambda: root.after(100, smart_gate_check))
 
@@ -435,8 +433,16 @@ def smart_gate_check():
             if not vehicle_confirmed:
                 if dist_cm < SAFETY_DISTANCE_CM:
                     if vehicle_entry_start_time is None: vehicle_entry_start_time = time.time()
+                    
+                    # --- VEHICLE CONFIRMATION LOGIC ---
                     if (time.time() - vehicle_entry_start_time) >= ENTRY_CONFIRM_TIME:
                         vehicle_confirmed = True
+                        
+                        # [NEW LOGIC] Vehicle Confirmed -> Turn RED immediately
+                        led_green_auth.off()
+                        led_red_unauth.on()
+                        # -----------------------------------------------------
+                        
                 else:
                     vehicle_entry_start_time = None
             elif vehicle_confirmed and dist_cm > SAFETY_DISTANCE_CM:
@@ -451,8 +457,7 @@ def smart_gate_check():
 def start_post_entry_wait():
     set_status("WAITING...", "orange")
     
-    # --- POST-ENTRY LED LOGIC: Red ON, Green OFF ---
-    # Signals the next car to STOP
+    # Red ON, Green OFF (Anti-Tailgating)
     led_green_auth.off()
     led_red_unauth.on()
     
@@ -462,7 +467,7 @@ def init_post_entry_scan():
     global system_state, last_plate_seen_time
     system_state = "POST-ENTRY SCAN"
     
-    # Ensure Red ON during scan period
+    # Ensure Red ON
     led_green_auth.off()
     led_red_unauth.on()
     
@@ -476,7 +481,7 @@ def monitor_post_entry_timer():
     countdown = max(0, EXIT_SCAN_COOLDOWN - elapsed)
     lbl_status.config(text=f"CLOSING IN: {countdown:.1f}s", fg="orange")
     
-    # Enforce LED State (Red ON) during countdown
+    # Ensure Red ON
     led_green_auth.off()
     led_red_unauth.on()
 
