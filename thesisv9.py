@@ -423,9 +423,9 @@ def load_history():
                 status = row.get("Status", "---")
                 
                 # Retrieve new metrics
-                lat_total = float(row.get("Latency_Total_ms", 0))
-                det = float(row.get("Det_ms", 0))
-                ocr = float(row.get("OCR_ms", 0))
+                lat_total = float(row.get("Latency", 0))
+                det = float(row.get("Det", 0))
+                ocr = float(row.get("OCR", 0))
                 
                 metrics = f"Det:{det:.0f} | OCR:{ocr:.0f}"
                 tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
