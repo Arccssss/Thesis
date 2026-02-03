@@ -397,46 +397,31 @@ def trigger_authorized_event():
         transition_to(STATE_OPENING) # Resets cycle
 
 def load_history():
-    # 1. Clear the current list so we don't show duplicates
-    for item in tree_history.get_children():
-        tree_history.delete(item)
-
-    # 2. Check if the file exists
-    if not os.path.exists(LOG_FILE):
-        return
-
+    for item in tree_history.get_children(): tree_history.delete(item)
+    if not os.path.exists(LOG_FILE): return
     try:
         with open(LOG_FILE, 'r', newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            # Convert to list and reverse so newest logs appear at the top
-            rows = list(reader)
-            
-            for row in reversed(rows):
-                # Parse Timestamp to show only HH:MM:SS
+            for row in reversed(list(reader)):
                 full_ts = row.get("Timestamp", "")
-                try:
-                    time_only = datetime.strptime(full_ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
-                except:
-                    time_only = full_ts
-
+                try: time_only = datetime.strptime(full_ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
+                except: time_only = full_ts
+                
                 plate = row.get("Plate", "Unknown")
                 name = row.get("Name", "Unknown")
                 status = row.get("Status", "---")
                 
-                # robust retrieval of latency/metrics
-                latency = row.get("Latency", "0")
-                det = row.get("Det", "0")
-                ocr = row.get("OCR", "0")
-                metrics = f"Det:{float(det):.0f} | OCR:{float(ocr):.0f}"
+                # Retrieve new metrics
+                lat_total = float(row.get("Latency_Total_ms", 0))
+                det = float(row.get("Det_ms", 0))
+                ocr = float(row.get("OCR_ms", 0))
                 
-                # Determine color tag (Green/Red)
+                metrics = f"Det:{det:.0f} | OCR:{ocr:.0f}"
                 tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
-
-                # Insert into the treeview
-                tree_history.insert("", "end", values=(time_only, plate, name, status, f"{float(latency):.2f}s", metrics), tags=(tag,))
                 
-    except Exception as e:
-        print(f"Error loading history: {e}")
+                # Display Total Latency in column
+                tree_history.insert("", "end", values=(time_only, plate, name, status, f"{lat_total:.0f} ms", metrics), tags=(tag,))
+    except Exception as e: print(f"Error loading history: {e}")
 
 def fix_reversed_plate(text):
     """

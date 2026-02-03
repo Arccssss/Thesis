@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAVES AI Mobile</title>
+    <style>
+        body { font-family: 'Arial', sans-serif; margin: 0; padding: 0; background: #f4f4f4; }
+        .header { background: #fff; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { margin: 0; font-size: 1.2rem; }
+        .btn { padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .btn-reset { background: #e0e0e0; color: #333; }
+        .btn-shutdown { background: #ffcccc; color: red; }
+        
+        .camera-container { width: 100%; background: #000; height: 50vh; display: flex; justify-content: center; align-items: center; }
+        .camera-feed { max-width: 100%; max-height: 100%; object-fit: contain; }
+        
+        .status-bar { background: #fff; padding: 15px; display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1rem; border-bottom: 1px solid #ddd; }
+        
+        .tabs { display: flex; background: #fff; margin-top: 10px; }
+        .tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; border-bottom: 3px solid transparent; }
+        .tab.active { border-bottom: 3px solid #6200ea; color: #6200ea; font-weight: bold; }
+        
+        .content { padding: 10px; }
+        .hidden { display: none; }
+        
+        table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 5px; overflow: hidden; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+        th { background: #eee; }
+        .authorized { color: green; font-weight: bold; }
+        .unauthorized { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <button class="btn btn-shutdown" onclick="sendCommand('shutdown')">OFF</button>
+        <h1>SAVES AI</h1>
+        <button class="btn btn-reset" onclick="sendCommand('reset')">RESET</button>
+    </div>
+
+    <div class="camera-container">
+        <img src="{{ url_for('video_feed') }}" class="camera-feed" alt="Live Feed">
+    </div>
+
+    <div class="status-bar">
+        <span id="state-text">IDLE</span>
+        <span id="dist-text">DIST: -- cm</span>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('logs')">Current Logs</div>
+        <div class="tab" onclick="switchTab('history')">History</div>
+    </div>
+
+    <div class="content">
+        <div id="logs-view">
+            <table>
+                <thead><tr><th>Time</th><th>Plate</th><th>Status</th></tr></thead>
+                <tbody id="logs-body"></tbody>
+            </table>
+        </div>
+        <div id="history-view" class="hidden">
+            <table>
+                <thead><tr><th>Time</th><th>Plate</th><th>Latency</th></tr></thead>
+                <tbody id="history-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab[onclick="switchTab('${tab}')"]`).classList.add('active');
+            
+            if(tab === 'logs') {
+                document.getElementById('logs-view').classList.remove('hidden');
+                document.getElementById('history-view').classList.add('hidden');
+            } else {
+                document.getElementById('logs-view').classList.add('hidden');
+                document.getElementById('history-view').classList.remove('hidden');
+                fetchHistory();
+            }
+        }
+
+        function sendCommand(cmd) {
+            if(confirm(`Are you sure you want to ${cmd}?`)) {
+                fetch(`/api/${cmd}`, { method: 'POST' });
+            }
+        }
+
+        function updateStatus() {
+            fetch('/api/status').then(r => r.json()).then(data => {
+                const stateText = document.getElementById('state-text');
+                stateText.innerText = data.state;
+                stateText.style.color = data.status_color;
+                
+                const dist = data.distance;
+                const distEl = document.getElementById('dist-text');
+                if(dist >= 148) distEl.innerText = "DIST: > 150 cm";
+                else {
+                    distEl.innerText = `DIST: ${dist} cm`;
+                    distEl.style.color = dist < 100 ? "red" : "green";
+                }
+            });
+        }
+
+        function fetchLogs() {
+            fetch('/api/logs').then(r => r.json()).then(data => {
+                const tbody = document.getElementById('logs-body');
+                tbody.innerHTML = data.map(log => `
+                    <tr>
+                        <td>${log.time}</td>
+                        <td>${log.plate}<br><small>${log.name}</small></td>
+                        <td class="${log.status === 'AUTHORIZED' ? 'authorized' : 'unauthorized'}">
+                            ${log.status}<br><small>${log.latency}</small>
+                        </td>
+                    </tr>
+                `).join('');
+            });
+        }
+
+        function fetchHistory() {
+            fetch('/api/history').then(r => r.json()).then(data => {
+                const tbody = document.getElementById('history-body');
+                tbody.innerHTML = data.map(row => {
+                    const time = row.Timestamp ? row.Timestamp.split(' ')[1] : '';
+                    return `
+                    <tr>
+                        <td>${time}</td>
+                        <td>${row.Plate}<br><small>${row.Name}</small></td>
+                        <td class="${row.Status === 'AUTHORIZED' ? 'authorized' : 'unauthorized'}">
+                            ${row.Status}<br><small>${parseInt(row.Latency_Total_ms || 0)}ms</small>
+                        </td>
+                    </tr>
+                `}).join('');
+            });
+        }
+
+        // Update loop
+        setInterval(updateStatus, 500);
+        setInterval(fetchLogs, 1000);
+    </script>
+</body>
+</html>
