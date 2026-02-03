@@ -84,8 +84,29 @@
         }
 
         function sendCommand(cmd) {
-            if(confirm(`Are you sure you want to ${cmd}?`)) {
-                fetch(`/api/${cmd}`, { method: 'POST' });
+            let msg = cmd === 'shutdown' ? "WARNING: Shut down system?" : "Reset system state?";
+            
+            if(confirm(msg)) {
+                fetch(`/api/${cmd}`, { method: 'POST' })
+                .then(response => {
+                    if (response.ok) {
+                        // If shutdown, show a final message
+                        if(cmd === 'shutdown') {
+                            alert("System is turning off. You can close this page.");
+                            document.body.innerHTML = "<h1 style='text-align:center; padding-top:50px;'>SYSTEM OFF</h1>";
+                        } else {
+                            // If reset, just notify (optional, or rely on the beep)
+                            console.log("Reset successful");
+                        }
+                    } else {
+                        alert("Error: Command failed.");
+                    }
+                })
+                .catch(err => {
+                    // This handles if the network fails
+                    console.error(err);
+                    alert("Request failed. Is the Pi connected?");
+                });
             }
         }
 

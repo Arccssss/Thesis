@@ -308,10 +308,6 @@ def camera_loop():
                                             # Calculate Total Latency
                                             total_latency = (time.perf_counter() - t_start_process) * 1000
                                             
-                                            # === FIX IS HERE ===
-                                            # We are now sending EXACTLY 6 arguments:
-                                            # 1. Plate, 2. Name, 3. Status, 4. Det Time, 5. OCR Time, 6. Total Latency
-                                            
                                             if most_common in authorized_plates:
                                                 row = auth_df[auth_df['Plate'] == most_common].iloc[0]
                                                 log_event(most_common, row['Name'], "AUTHORIZED", t_detect, t_ocr, total_latency)
@@ -399,12 +395,22 @@ def api_history():
 @app.route('/api/reset', methods=['POST'])
 def api_reset():
     transition_to(STATE_IDLE)
-    return jsonify({"success": True})
+    # Beep to confirm reset (Visual/Audio feedback)
+    buzzer.beep(on_time=0.1, off_time=0.1, n=1, background=True) 
+    return jsonify({"success": True, "message": "System Reset"})
+
+def delayed_shutdown():
+    time.sleep(1.0) # Wait 1 second to let the response send
+    print("🛑 System Shutting Down...")
+    gate_p1.off()   # Turn off gate pin properly
+    gate_p2.on()    # Lock gate (if applicable)
+    os._exit(0)     # Force kill
 
 @app.route('/api/shutdown', methods=['POST'])
 def api_shutdown():
-    gate_p1.close(); gate_p2.on()
-    os._exit(0)
+    # Start the shutdown in a background thread
+    threading.Thread(target=delayed_shutdown).start()
+    return jsonify({"success": True, "message": "Shutting Down..."})
 
 # ==========================================
 #           MAIN ENTRY
