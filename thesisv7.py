@@ -101,10 +101,6 @@ def close_application():
 def minimize_window(): 
     root.iconify()
 
-# Floating Minimize Button
-btn_minimize = tk.Button(root, text=" — ", command=minimize_window, bg="#f0f0f0", font=("Arial", 14, "bold"), relief="flat")
-btn_minimize.place(relx=1.0, x=-10, y=10, anchor="ne")
-
 style = ttk.Style()
 style.theme_use("clam")
 style.configure("Treeview.Heading", background="#cccccc", foreground="white", font=("Arial", 10, "bold"), relief="flat")
@@ -123,6 +119,9 @@ for frame in (page_camera, page_logs, page_history):
 
 def show_frame(frame):
     frame.tkraise()
+    # Lift minimize button so it is never hidden
+    try: btn_minimize.lift()
+    except: pass
 
 def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=None):
     header_frame = tk.Frame(parent, bg="white", pady=5)
@@ -209,6 +208,12 @@ tree_history = create_treeview(page_history)
 
 tk.Button(page_history, text="Refresh Logs", command=lambda: load_history_data(), bg="#e0e0e0", relief="flat").pack(side="bottom", fill="x", pady=5, padx=10)
 
+# --- MINIMIZE BUTTON (Placed last to ensure it's on top) ---
+btn_minimize = tk.Button(root, text=" — ", command=minimize_window, 
+                        bg="#f0f0f0", font=("Arial", 14, "bold"), relief="flat", bd=1)
+btn_minimize.place(relx=1.0, x=-10, y=10, anchor="ne")
+btn_minimize.lift()
+
 # ================= LOGIC =================
 logged_vehicles = {} 
 scan_buffer = deque(maxlen=SCAN_BUFFER_LEN)
@@ -244,7 +249,7 @@ def update_distance_ui(dist_cm):
         lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
 def load_history_data():
-    """Load logs ensuring Headers match exact CSV format"""
+    """Load logs ensuring Headers match exact CSV format: Plate,Name,Faculty,Status,Timestamp,Latency,Det,OCR"""
     for i in tree_history.get_children(): 
         tree_history.delete(i)
         
@@ -264,13 +269,13 @@ def load_history_data():
                 except: 
                     short_ts = ts
                 
-                # FALLBACK LOGIC to handle casing mismatch (Ocr vs OCR)
-                plate = row.get('Plate', row.get('plate', 'Unknown'))
-                name = row.get('Name', row.get('name', 'Unknown'))
+                # Fetching using exact headers
+                plate = row.get('Plate', 'Unknown')
+                name = row.get('Name', 'Unknown')
                 
-                det = row.get('Det', row.get('det', '0'))
-                ocr = row.get('OCR', row.get('ocr', '0')) # Try both 'OCR' and 'ocr'
-                latency = row.get('Latency', row.get('latency', '0'))
+                det = row.get('Det', '0')
+                ocr = row.get('OCR', '0') # Capitalized OCR per user request
+                latency = row.get('Latency', '0')
                 
                 perf_display = f"Det: {float(det):.0f}ms | OCR: {float(ocr):.0f}ms"
                 
@@ -304,8 +309,8 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
         
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            # We enforce these headers. load_history_data matches them.
-            fieldnames = ["Plate","Name","Faculty","Status","Timestamp","Latency","Det","OCR"]
+            # Enforcing exact requested headers
+            fieldnames = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             
             if not file_exists:
@@ -490,7 +495,7 @@ def update_frame():
                                 most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
                                     
-                                    # [FIX] LATENCY IS NOW OCR + DETECTION TIME (converted to seconds)
+                                    # LATENCY = DETECTION + OCR TIME (in seconds)
                                     latency = (t_detect + t_ocr_ms) / 1000.0
                                     
                                     if most_common in authorized_plates:
