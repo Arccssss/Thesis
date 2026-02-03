@@ -398,7 +398,7 @@ def api_history():
                     "Plate":     row.get("Plate", "Unknown"),
                     "Status":    row.get("Status", "--"),
                     "Name":      row.get("Name", ""),
-                    "Latency":   row.get("Latency_Total_ms", "0") 
+                    "Latency":   row.get("Latency", "0") 
                 }
                 history.append(clean_entry)
 
