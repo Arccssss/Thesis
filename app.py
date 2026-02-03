@@ -338,17 +338,34 @@ def api_status():
 def api_logs():
     return jsonify(session_logs)
 
+# Replace the existing @app.route('/api/history') with this:
 @app.route('/api/history')
 def api_history():
     history = []
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in list(reader)[::-1]: # Reverse order
-                    history.append(row)
-        except: pass
-    return jsonify(history[:50]) # Limit to last 50
+    
+    # 1. Check if file exists
+    if not os.path.exists(LOG_FILE):
+        return jsonify([])
+
+    try:
+        with open(LOG_FILE, 'r', encoding='utf-8') as f:
+            # 2. Check if file is empty
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                return jsonify([])
+            f.seek(0) # Reset to start of file
+
+            # 3. Read and Reverse (Show newest first)
+            reader = csv.DictReader(f)
+            data = list(reader)
+            for row in reversed(data):
+                history.append(row)
+                
+    except Exception as e:
+        print(f"History Read Error: {e}")
+        
+    # Return the last 50 entries to the phone
+    return jsonify(history[:50])
 
 @app.route('/api/reset', methods=['POST'])
 def api_reset():
