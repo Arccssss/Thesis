@@ -355,8 +355,29 @@ def log_event(plate, name, status, lat, det, ocr, dur):
     tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
     tree.insert("", 0, values=(ts, plate, name, status, f"{lat:.2f}s", perf), tags=(tag,))
     
-    # Save CSV logic here (simplified for brevity)
-    # ... (Your existing CSV code) ...
+    try:
+        file_exists = os.path.isfile(LOG_FILE)
+        # Use 'a' (append) mode so we don't overwrite previous logs
+        with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR", "AuthDuration"]
+            writer = csv.DictWriter(f, fieldnames=headers)
+            
+            if not file_exists:
+                writer.writeheader()
+                
+            writer.writerow({
+                "Plate": plate,
+                "Name": name,
+                "Faculty": "N/A", 
+                "Status": status,
+                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Latency": f"{lat:.4f}",
+                "Det": f"{det:.2f}",
+                "OCR": f"{ocr:.2f}",
+                "AuthDuration": f"{dur:.4f}"
+            })
+    except Exception as e:
+        print(f"❌ Log Error: {e}")
 
     if status == "AUTHORIZED":
         trigger_authorized_event()
@@ -375,8 +396,74 @@ def trigger_authorized_event():
         transition_to(STATE_OPENING) # Resets cycle
 
 def load_history():
-    # ... (Your existing history loader) ...
-    pass
+    # 1. Clear the current list so we don't show duplicates
+    for item in tree_history.get_children():
+        tree_history.delete(item)
+
+    # 2. Check if the file exists
+    if not os.path.exists(LOG_FILE):
+        return
+
+    try:
+        with open(LOG_FILE, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            # Convert to list and reverse so newest logs appear at the top
+            rows = list(reader)
+            
+            for row in reversed(rows):
+                # Parse Timestamp to show only HH:MM:SS
+                full_ts = row.get("Timestamp", "")
+                try:
+                    time_only = datetime.strptime(full_ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
+                except:
+                    time_only = full_ts
+
+                plate = row.get("Plate", "Unknown")
+                name = row.get("Name", "Unknown")
+                status = row.get("Status", "---")
+                
+                # robust retrieval of latency/metrics
+                latency = row.get("Latency", "0")
+                det = row.get("Det", "0")
+                ocr = row.get("OCR", "0")
+                metrics = f"Det:{float(det):.0f} | OCR:{float(ocr):.0f}"
+                
+                # Determine color tag (Green/Red)
+                tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
+
+                # Insert into the treeview
+                tree_history.insert("", "end", values=(time_only, plate, name, status, f"{float(latency):.2f}s", metrics), tags=(tag,))
+                
+    except Exception as e:
+        print(f"Error loading history: {e}")
+
+def fix_reversed_plate(text):
+    """
+    Detects if a plate is in '1234ABC' format and flips it to 'ABC1234'.
+    """
+    # Safety check: must be at least 4 chars to flip
+    if len(text) < 4:
+        return text
+
+    # Logic: If it starts with a Number AND ends with a Letter -> FLIP IT
+    if text[0].isdigit() and text[-1].isalpha():
+        # Find the split point: where do the numbers stop and letters start?
+        split_index = -1
+        for i, char in enumerate(text):
+            if char.isalpha():
+                split_index = i
+                break
+        
+        # If we found a split point (e.g., index 4 in "1234ABC")
+        if split_index > 0:
+            numbers_part = text[:split_index] # "1234"
+            letters_part = text[split_index:] # "ABC"
+            
+            # Return flipped: "ABC" + "1234"
+            return letters_part + numbers_part
+
+    # If it's already normal (starts with letter), just return it
+    return text
 
 def update_frame():
     global detection_start_time, last_plate_seen_time
@@ -392,8 +479,11 @@ def update_frame():
     h, w, _ = frame_rgb.shape
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
     roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
+    
+    # Draw the static ROI box (The big green zone)
     cv2.rectangle(frame_rgb, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), ROI_COLOR, 3)
-    roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w] # Use BGR for model if needed
+    
+    roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w] # Use BGR for model
 
     # Only detect if IDLE or POST_ENTRY (checking for tailgaters)
     should_detect = (current_state == STATE_IDLE) or (current_state == STATE_POST_ENTRY)
@@ -416,19 +506,27 @@ def update_frame():
                     # Run OCR
                     for box in result.boxes.xyxy.cpu().numpy():
                         x1, y1, x2, y2 = map(int, box)
+                        
+                        # --- FIX: DRAW THE DETECTED PLATE BOX ---
+                        # We must add roi_x/roi_y because 'box' is relative to the crop
+                        cv2.rectangle(frame_rgb, (x1+roi_x, y1+roi_y), (x2+roi_x, y2+roi_y), (255, 0, 0), 3)
+                        # ----------------------------------------
+
                         p_crop = roi_crop[y1:y2, x1:x2]
                         if p_crop.size > 0:
                             # Preprocess & Read
                             gray = cv2.cvtColor(p_crop, cv2.COLOR_BGR2GRAY)
                             text = reader.readtext(gray, detail=0)
                             clean = "".join([c for c in "".join(text).upper() if c.isalnum()])
-                            
+
+                            clean = fix_reversed_plate(clean)    
+
                             if len(clean) > 3:
                                 scan_buffer.append(clean)
                                 most_common, _ = Counter(scan_buffer).most_common(1)[0]
                                 
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
-                                    t_ocr = 0 # Placeholder for simplicity
+                                    t_ocr = 0 
                                     
                                     if most_common in authorized_plates:
                                         row = auth_df[auth_df['Plate'] == most_common].iloc[0]
@@ -448,7 +546,6 @@ def update_frame():
     win_h = video_frame_container.winfo_height()
     
     if win_w > 10 and win_h > 10:
-        # Calculate aspect ratio scaling
         scale = min(win_w / w, win_h / h)
         new_w, new_h = int(w * scale), int(h * scale)
         
