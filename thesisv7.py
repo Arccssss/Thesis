@@ -6,6 +6,7 @@ import time
 import pandas as pd
 import os
 import re
+import sys 
 from datetime import datetime
 from collections import Counter, deque
 import csv 
@@ -32,7 +33,7 @@ ABSENCE_RESET_TIME = 2.5
 
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
-SENSOR_POLL_RATE = 100
+SENSOR_POLL_RATE = 100    
 
 POST_ENTRY_DELAY = 0.5   
 EXIT_SCAN_COOLDOWN = 5.0 
@@ -90,6 +91,20 @@ root.configure(bg="white")
 root.attributes('-fullscreen', True)
 root.bind("<Escape>", lambda event: root.attributes("-fullscreen", True))
 
+# --- WINDOW CONTROLS ---
+def close_application():
+    if picam2: picam2.stop()
+    gate_p1.close(); gate_p2.on() 
+    led_open.off(); led_close.off()
+    root.destroy(); sys.exit(0)
+
+def minimize_window(): 
+    root.iconify()
+
+# Floating Minimize Button
+btn_minimize = tk.Button(root, text=" — ", command=minimize_window, bg="#f0f0f0", font=("Arial", 14, "bold"), relief="flat")
+btn_minimize.place(relx=1.0, x=-10, y=10, anchor="ne")
+
 style = ttk.Style()
 style.theme_use("clam")
 style.configure("Treeview.Heading", background="#cccccc", foreground="white", font=("Arial", 10, "bold"), relief="flat")
@@ -117,11 +132,19 @@ def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=No
     header_frame.columnconfigure(2, weight=1)
 
     if left_btn:
+        bg_color = "#ffcccc" if "Shutdown" in left_btn['text'] else "#e0e0e0"
+        fg_color = "red" if "Shutdown" in left_btn['text'] else "#555"
+        
         btn = tk.Button(header_frame, text=left_btn['text'], command=left_btn['cmd'],
+                        bg=bg_color, fg=fg_color, font=("Arial", 9, "bold"), 
+                        relief="flat", padx=10, pady=5, bd=0)
+        btn.grid(row=0, column=0, sticky="w")
+        
+        if "Shutdown" in left_btn['text']:
+             btn_reset = tk.Button(header_frame, text="Reset", command=lambda: reset_gate_system(),
                         bg="#e0e0e0", fg="#555", font=("Arial", 9, "bold"), 
                         relief="flat", padx=10, pady=5, bd=0)
-        if 'color' in left_btn: btn.config(fg=left_btn['color'], bg="#f0f0f0")
-        btn.grid(row=0, column=0, sticky="w")
+             btn_reset.grid(row=0, column=0, sticky="w", padx=(100, 0))
 
     title_container = tk.Frame(header_frame, bg="white")
     title_container.grid(row=0, column=1)
@@ -137,7 +160,7 @@ def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=No
 
 # ================= PAGE 1: CAMERA =================
 create_header(page_camera, "SAVES AI", None,
-              left_btn={'text': "Reset System", 'cmd': lambda: reset_gate_system()},
+              left_btn={'text': "Shutdown", 'cmd': close_application},
               right_btn={'text': "Current Session Logs  ➜", 'cmd': lambda: show_frame(page_logs)})
 
 video_frame_container = tk.Frame(page_camera, bg="#ff4d4d", padx=2, pady=2)
@@ -221,7 +244,7 @@ def update_distance_ui(dist_cm):
         lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
 def load_history_data():
-    """Load logs using EXACT CSV headers requested: Plate,Name,Faculty,Status,Timestamp,Latency,Det,OCR"""
+    """Load logs ensuring Headers match exact CSV format"""
     for i in tree_history.get_children(): 
         tree_history.delete(i)
         
@@ -241,10 +264,13 @@ def load_history_data():
                 except: 
                     short_ts = ts
                 
-                # EXACT HEADERS MAPPING
-                det = row.get('Det', '0')
-                ocr = row.get('OCR', '0') # Capitalized OCR per user request
-                latency = row.get('Latency', '0')
+                # FALLBACK LOGIC to handle casing mismatch (Ocr vs OCR)
+                plate = row.get('Plate', row.get('plate', 'Unknown'))
+                name = row.get('Name', row.get('name', 'Unknown'))
+                
+                det = row.get('Det', row.get('det', '0'))
+                ocr = row.get('OCR', row.get('ocr', '0')) # Try both 'OCR' and 'ocr'
+                latency = row.get('Latency', row.get('latency', '0'))
                 
                 perf_display = f"Det: {float(det):.0f}ms | OCR: {float(ocr):.0f}ms"
                 
@@ -253,8 +279,8 @@ def load_history_data():
                 
                 tree_history.insert("", "end", values=(
                     short_ts, 
-                    row.get('Plate', ''), 
-                    row.get('Name', ''), 
+                    plate, 
+                    name, 
                     status_txt, 
                     f"{float(latency):.2f}s", 
                     perf_display
@@ -274,11 +300,13 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         tree.insert("", 0, values=(ts_s, plate, name, status, f"{latency:.2f}s", perf_display), tags=(tag,))
         
-        # CSV Update - Exact Headers: Plate,Name,Faculty,Status,Timestamp,Latency,Det,OCR
+        # CSV Update
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
         
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=["Plate","Name","Faculty","Status","Timestamp","Latency","Det","OCR"])
+            # We enforce these headers. load_history_data matches them.
+            fieldnames = ["Plate","Name","Faculty","Status","Timestamp","Latency","Det","OCR"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             
             if not file_exists:
                 writer.writeheader()
@@ -408,13 +436,10 @@ def update_frame():
         frame = picam2.capture_array() if picam2 else np.zeros((540, 960, 3), dtype=np.uint8)
     except: root.after(100, update_frame); return
 
-    # --- FIX FOR ULTRASONIC FEEDBACK ---
-    # Update distance label EVERY frame so it doesn't freeze during scanning
     try:
         current_dist = sensor.distance * 100
         update_distance_ui(current_dist)
     except: pass
-    # -----------------------------------
 
     cv2.putText(frame, f"STATUS: {system_state}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
 
@@ -464,7 +489,9 @@ def update_frame():
                                 scan_buffer.append(clean_text)
                                 most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
-                                    latency = current_time - first_sight_times.get(most_common, current_time)
+                                    
+                                    # [FIX] LATENCY IS NOW OCR + DETECTION TIME (converted to seconds)
+                                    latency = (t_detect + t_ocr_ms) / 1000.0
                                     
                                     if most_common in authorized_plates:
                                         row = auth_df[auth_df['Plate'] == most_common].iloc[0]
