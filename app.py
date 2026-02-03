@@ -394,23 +394,32 @@ def api_history():
 
 @app.route('/api/reset', methods=['POST'])
 def api_reset():
+    # 1. Print immediately to terminal
+    print("\n🔵 WEB COMMAND RECEIVED: RESET", flush=True)
+    
+    # 2. Perform logic
     transition_to(STATE_IDLE)
-    # Beep to confirm reset (Visual/Audio feedback)
-    buzzer.beep(on_time=0.1, off_time=0.1, n=1, background=True) 
-    return jsonify({"success": True, "message": "System Reset"})
-
-def delayed_shutdown():
-    time.sleep(1.0) # Wait 1 second to let the response send
-    print("🛑 System Shutting Down...")
-    gate_p1.off()   # Turn off gate pin properly
-    gate_p2.on()    # Lock gate (if applicable)
-    os._exit(0)     # Force kill
+    buzzer.beep(on_time=0.1, off_time=0.1, n=1, background=True)
+    
+    return jsonify({"success": True})
 
 @app.route('/api/shutdown', methods=['POST'])
 def api_shutdown():
-    # Start the shutdown in a background thread
-    threading.Thread(target=delayed_shutdown).start()
-    return jsonify({"success": True, "message": "Shutting Down..."})
+    # 1. Print immediately to terminal
+    print("\n🔴 WEB COMMAND RECEIVED: SHUTDOWN", flush=True)
+    
+    # 2. Define the delayed kill function
+    def delayed_kill():
+        time.sleep(1.0) # Wait 1s for the phone to get the "OK" message
+        print("🛑 SYSTEM: Killing process now...", flush=True)
+        gate_p1.off()
+        gate_p2.on()
+        os._exit(0)
+
+    # 3. Start the delay in background so we can reply to the phone first
+    threading.Thread(target=delayed_kill).start()
+    
+    return jsonify({"success": True})
 
 # ==========================================
 #           MAIN ENTRY
