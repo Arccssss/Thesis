@@ -29,7 +29,9 @@ ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5
 ROI_COLOR = (0, 255, 0) 
 GRACE_PERIOD = 0.3      
 GATE_ACTION_TIME = 3000 
-ABSENCE_RESET_TIME = 2.5 
+
+# [FIX] INCREASED TO 10 SECONDS to prevent timer resetting during glare/flicker
+ABSENCE_RESET_TIME = 4.0 
 
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
@@ -526,6 +528,10 @@ def update_frame():
         if not detected_box and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear(); first_sight_times.clear()
 
+
+    win_w = video_frame_container.winfo_width()
+    win_h = video_frame_container.winfo_height()
+    
     if win_w > 10 and win_h > 10:
         scale = min(win_w / w, win_h / h)
         new_w, new_h = int(w * scale), int(h * scale)
