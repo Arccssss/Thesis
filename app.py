@@ -368,28 +368,43 @@ def api_logs():
 def api_history():
     history = []
     
-    # 1. Check if file exists
+    # 1. Safety Check: Does file exist?
     if not os.path.exists(LOG_FILE):
         return jsonify([])
 
     try:
-        with open(LOG_FILE, 'r', encoding='utf-8') as f:
-            # 2. Check if file is empty
+        with open(LOG_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+            # 2. Check for empty file
             f.seek(0, os.SEEK_END)
             if f.tell() == 0:
                 return jsonify([])
-            f.seek(0) # Reset to start of file
+            f.seek(0)
 
-            # 3. Read and Reverse (Show newest first)
+            # 3. Read the CSV
             reader = csv.DictReader(f)
-            data = list(reader)
-            for row in reversed(data):
-                history.append(row)
+            
+            # 4. Extract ONLY the columns you want
+            # We use .get() so if a column is missing, it returns "N/A" instead of crashing
+            raw_data = list(reader)
+            
+            for row in reversed(raw_data):
+                # Skip empty rows
+                if not row.get('Plate'): continue
                 
+                # Create a simple object with only 3-4 fields
+                clean_entry = {
+                    "Timestamp": row.get("Timestamp", ""),
+                    "Plate":     row.get("Plate", "Unknown"),
+                    "Status":    row.get("Status", "--"),
+                    "Name":      row.get("Name", "") # Optional: Keeps the UI looking nice
+                }
+                history.append(clean_entry)
+
     except Exception as e:
-        print(f"History Read Error: {e}")
+        print(f"⚠️ HISTORY ERROR: {e}", flush=True)
+        return jsonify([])
         
-    # Return the last 50 entries to the phone
+    # Return last 50 entries
     return jsonify(history[:50])
 
 @app.route('/api/reset', methods=['POST'])
