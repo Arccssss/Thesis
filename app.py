@@ -153,16 +153,24 @@ def transition_to(new_state):
         # Non-blocking delay handled in FSM loop
 
 def log_event(plate, name, status, det, ocr, total_lat):
+    global session_logs  # Access the global list for the web UI
     ts = datetime.now().strftime("%H:%M:%S")
-    
-    # Display breakdown in the GUI (Det + OCR + Total)
+
+    # 1. Update In-Memory List (Instead of Treeview)
     perf = f"Det:{det:.0f}ms | OCR:{ocr:.0f}ms"
     
-    tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
-    # Show the TOTAL latency in the "Latency" column
-    tree.insert("", 0, values=(ts, plate, name, status, f"{total_lat:.0f} ms", perf), tags=(tag,))
+    log_entry = {
+        "time": ts,
+        "plate": plate,
+        "name": name,
+        "status": status,
+        "latency": f"{total_lat:.0f} ms",
+        "metrics": perf
+    }
+    # Add to the top of the list
+    session_logs.insert(0, log_entry)
     
-    # Save to CSV
+    # 2. Save to CSV (Your exact CSV logic)
     try:
         file_exists = os.path.isfile(LOG_FILE)
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
@@ -185,18 +193,25 @@ def log_event(plate, name, status, det, ocr, total_lat):
     except Exception as e:
         print(f"❌ Log Error: {e}")
 
+    # 3. Hardware Actions
     if status == "AUTHORIZED":
-        trigger_authorized_event()
+        # In API version, checking state directly is safer
+        if current_state == STATE_IDLE or current_state == STATE_POST_ENTRY:
+             transition_to(STATE_OPENING)
     else:
-        # --- FIX: Handle Unauthorized Alerts Correctly ---
+        # --- FIX: Handle Unauthorized Alerts (Server Compatible) ---
         if current_state == STATE_IDLE:
-            # 1. Blink FAST (0.1s) instead of default slow (1s)
+            # 1. Blink FAST (0.1s)
             led_red_unauth.blink(on_time=0.1, off_time=0.1, n=3, background=True)
             buzzer.beep(on_time=0.1, off_time=0.1, n=3, background=True)
             
-            # 2. Schedule Red LED to turn back ON after 700ms (0.2s * 3 = 600ms + buffer)
-            # We strictly check if we are still in IDLE to avoid turning Red on if the gate opened.
-            root.after(700, lambda: led_red_unauth.on() if current_state == STATE_IDLE else None)
+            # 2. Schedule Red LED to turn back ON after 0.7s
+            # We use threading.Timer instead of root.after because there is no GUI loop
+            def reset_led():
+                if current_state == STATE_IDLE:
+                    led_red_unauth.on()
+
+            threading.Timer(0.7, reset_led).start()
 
 # ==========================================
 #           BACKGROUND LOOPS
