@@ -62,7 +62,7 @@
         </div>
         <div id="history-view" class="hidden">
             <table>
-                <thead><tr><th>Time</th><th>Plate</th><th>Latency</th></tr></thead>
+                <thead><tr><th>Time</th><th>Plate</th><th>Status</th></tr></thead>
                 <tbody id="history-body"></tbody>
             </table>
         </div>
@@ -146,28 +146,29 @@
             fetch('/api/history').then(r => r.json()).then(data => {
                 const tbody = document.getElementById('history-body');
                 
-                // Handle empty history
-                if(data.length === 0) {
-                     tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;'>No History Found</td></tr>";
-                     return;
+                if (data.length === 0) {
+                    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center'>No History</td></tr>";
+                    return;
                 }
 
                 tbody.innerHTML = data.map(row => {
-                    // Safety check: if time is missing, don't crash
-                    const timeStr = row.Timestamp ? row.Timestamp.split(' ')[1] : '--:--';
+                    const timeOnly = row.Timestamp ? row.Timestamp.split(' ')[1] : '';
                     
+                    // Parse the latency safely. If it's missing, show 0.
+                    const lat = parseInt(row.Latency || 0);
+
                     return `
                     <tr>
-                        <td>${timeStr}</td>
-                        <td>${row.Plate}<br><small>${row.Name}</small></td>
+                        <td>${timeOnly}</td>
+                        <td>${row.Plate}<br><small style="color:#aaa">${row.Name}</small></td>
                         <td class="${row.Status === 'AUTHORIZED' ? 'authorized' : 'unauthorized'}">
                             ${row.Status}
                             <br>
-                            <small style="color:#999;">${parseInt(row.Latency_Total_ms || 0)}ms</small>
+                            <small style="color:#888; font-weight:normal; font-size:0.8em;">${lat}ms</small>
                         </td>
                     </tr>
                 `}).join('');
-            }).catch(e => console.log("History error", e));
+            });
         }
 
         // Update loop

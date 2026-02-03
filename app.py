@@ -380,22 +380,20 @@ def api_history():
             f.seek(0)
 
             reader = csv.DictReader(f)
-            
-            # Read all rows
             raw_data = list(reader)
             
             for row in reversed(raw_data):
                 if not row.get('Plate'): continue
                 
-                # === THE FIX IS HERE ===
-                # We try to get 'Latency_Total_ms'. 
-                # If it doesn't exist (old file), we default to '0'.
+                # === THE FIX ===
+                # We use .get(..., "0") to safely grab latency. 
+                # If the column is missing (old logs), it defaults to "0" instead of crashing.
                 clean_entry = {
-                    "Timestamp":        row.get("Timestamp", ""),
-                    "Plate":            row.get("Plate", "Unknown"),
-                    "Status":           row.get("Status", "--"),
-                    "Name":             row.get("Name", ""),
-                    "Latency_Total_ms": row.get("Latency_Total_ms", "0") 
+                    "Timestamp": row.get("Timestamp", ""),
+                    "Plate":     row.get("Plate", "Unknown"),
+                    "Status":    row.get("Status", "--"),
+                    "Name":      row.get("Name", ""),
+                    "Latency":   row.get("Latency_Total_ms", "0") 
                 }
                 history.append(clean_entry)
 
