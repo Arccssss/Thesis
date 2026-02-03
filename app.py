@@ -429,6 +429,8 @@ def api_shutdown():
         print("🛑 SYSTEM: Killing process now...", flush=True)
         gate_p1.off()
         gate_p2.on()
+        led_green_auth.off()
+        led_red_unauth.off()
         os._exit(0)
 
     # 3. Start the delay in background so we can reply to the phone first
