@@ -349,17 +349,21 @@ def fsm_update_loop():
 # ==========================================
 #           VISION & LOGGING
 # ==========================================
-def log_event(plate, name, status, lat, det, ocr, dur):
+def log_event(plate, name, status, det, ocr, total_lat):
     ts = datetime.now().strftime("%H:%M:%S")
-    perf = f"Det:{det:.0f} | OCR:{ocr:.0f}"
-    tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
-    tree.insert("", 0, values=(ts, plate, name, status, f"{lat:.2f}s", perf), tags=(tag,))
     
+    # Display breakdown in the GUI (Det + OCR + Total)
+    perf = f"Det:{det:.0f}ms | OCR:{ocr:.0f}ms"
+    
+    tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
+    # Show the TOTAL latency in the "Latency" column
+    tree.insert("", 0, values=(ts, plate, name, status, f"{total_lat:.0f} ms", perf), tags=(tag,))
+    
+    # Save to CSV
     try:
         file_exists = os.path.isfile(LOG_FILE)
-        # Use 'a' (append) mode so we don't overwrite previous logs
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR", "AuthDuration"]
+            headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency_Total_ms", "Det_ms", "OCR_ms"]
             writer = csv.DictWriter(f, fieldnames=headers)
             
             if not file_exists:
@@ -371,10 +375,9 @@ def log_event(plate, name, status, lat, det, ocr, dur):
                 "Faculty": "N/A", 
                 "Status": status,
                 "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Latency": f"{lat:.4f}",
-                "Det": f"{det:.2f}",
-                "OCR": f"{ocr:.2f}",
-                "AuthDuration": f"{dur:.4f}"
+                "Latency_Total_ms": f"{total_lat:.2f}", # Total time from Frame -> Gate Trigger
+                "Det_ms": f"{det:.2f}",
+                "OCR_ms": f"{ocr:.2f}"
             })
     except Exception as e:
         print(f"❌ Log Error: {e}")
@@ -382,10 +385,8 @@ def log_event(plate, name, status, lat, det, ocr, dur):
     if status == "AUTHORIZED":
         trigger_authorized_event()
     else:
-        # Unauthorized Alert
         if current_state == STATE_IDLE:
-            led_red_unauth.blink(n=3)
-            buzzer.beep(n=3)
+            led_red_unauth.blink(n=3); buzzer.beep(n=3)
 
 def trigger_authorized_event():
     # Only act if IDLE or we are looking for the "Next Vehicle" in POST_ENTRY
@@ -470,28 +471,28 @@ def update_frame():
     
     if picam2 is None: return root.after(100, update_frame)
 
+    # 1. Start the clock for TOTAL latency
+    t_start_process = time.perf_counter()
+
     try: frame = picam2.capture_array()
     except: return root.after(100, update_frame)
 
-    # 1. Convert BGR (OpenCV/PiCam) to RGB (Tkinter)
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
     h, w, _ = frame_rgb.shape
     roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
     roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
     
-    # Draw the static ROI box (The big green zone)
     cv2.rectangle(frame_rgb, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), ROI_COLOR, 3)
-    
-    roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w] # Use BGR for model
+    roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w] 
 
-    # Only detect if IDLE or POST_ENTRY (checking for tailgaters)
     should_detect = (current_state == STATE_IDLE) or (current_state == STATE_POST_ENTRY)
     
     if should_detect:
-        t0 = time.perf_counter()
+        # Detection Timer
+        t0_det = time.perf_counter()
         results = model(roi_crop, verbose=False, conf=0.4)
-        t_detect = (time.perf_counter() - t0) * 1000
+        t_detect = (time.perf_counter() - t0_det) * 1000 # ms
         
         current_time = time.time()
         detected = False
@@ -503,56 +504,50 @@ def update_frame():
                 if detection_start_time is None: detection_start_time = current_time
                 
                 if (current_time - detection_start_time) > GRACE_PERIOD:
-                    # Run OCR
                     for box in result.boxes.xyxy.cpu().numpy():
                         x1, y1, x2, y2 = map(int, box)
-                        
-                        # --- FIX: DRAW THE DETECTED PLATE BOX ---
-                        # We must add roi_x/roi_y because 'box' is relative to the crop
                         cv2.rectangle(frame_rgb, (x1+roi_x, y1+roi_y), (x2+roi_x, y2+roi_y), (255, 0, 0), 3)
-                        # ----------------------------------------
 
                         p_crop = roi_crop[y1:y2, x1:x2]
                         if p_crop.size > 0:
-                            # Preprocess & Read
+                            # OCR Timer
+                            t0_ocr = time.perf_counter()
                             gray = cv2.cvtColor(p_crop, cv2.COLOR_BGR2GRAY)
                             text = reader.readtext(gray, detail=0)
+                            t_ocr = (time.perf_counter() - t0_ocr) * 1000 # ms
+                            
                             clean = "".join([c for c in "".join(text).upper() if c.isalnum()])
-
-                            clean = fix_reversed_plate(clean)    
+                            clean = fix_reversed_plate(clean)
 
                             if len(clean) > 3:
                                 scan_buffer.append(clean)
                                 most_common, _ = Counter(scan_buffer).most_common(1)[0]
                                 
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
-                                    t_ocr = 0 
+                                    # --- CALCULATE TOTAL LATENCY ---
+                                    # (Current Time - Start Time) * 1000 to get ms
+                                    total_latency = (time.perf_counter() - t_start_process) * 1000
                                     
                                     if most_common in authorized_plates:
                                         row = auth_df[auth_df['Plate'] == most_common].iloc[0]
-                                        log_event(most_common, row['Name'], "AUTHORIZED", 0.0, t_detect, 0, 0)
+                                        log_event(most_common, row['Name'], "AUTHORIZED", t_detect, t_ocr, total_latency)
                                     else:
-                                        log_event(most_common, "Unknown", "UNAUTHORIZED", 0.0, t_detect, 0, 0)
+                                        log_event(most_common, "Unknown", "UNAUTHORIZED", t_detect, t_ocr, total_latency)
                                     
                                     logged_vehicles[most_common] = current_time
                                     scan_buffer.clear()
 
         if not detected and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
-            detection_start_time = None
-            scan_buffer.clear()
+            detection_start_time = None; scan_buffer.clear()
 
-    # Resize for GUI (Aspect Ratio Maintained)
     win_w = video_frame_container.winfo_width()
     win_h = video_frame_container.winfo_height()
-    
     if win_w > 10 and win_h > 10:
         scale = min(win_w / w, win_h / h)
         new_w, new_h = int(w * scale), int(h * scale)
-        
         img_resized = cv2.resize(frame_rgb, (new_w, new_h))
-        imgtk = ImageTk.PhotoImage(image=Image.fromarray(img_resized))
-        video_label.imgtk = imgtk
-        video_label.configure(image=imgtk)
+        video_label.imgtk = ImageTk.PhotoImage(image=Image.fromarray(img_resized))
+        video_label.configure(image=video_label.imgtk)
 
     root.after(10, update_frame)
 
