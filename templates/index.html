@@ -145,18 +145,29 @@
         function fetchHistory() {
             fetch('/api/history').then(r => r.json()).then(data => {
                 const tbody = document.getElementById('history-body');
+                
+                // Handle empty history
+                if(data.length === 0) {
+                     tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;'>No History Found</td></tr>";
+                     return;
+                }
+
                 tbody.innerHTML = data.map(row => {
-                    const time = row.Timestamp ? row.Timestamp.split(' ')[1] : '';
+                    // Safety check: if time is missing, don't crash
+                    const timeStr = row.Timestamp ? row.Timestamp.split(' ')[1] : '--:--';
+                    
                     return `
                     <tr>
-                        <td>${time}</td>
+                        <td>${timeStr}</td>
                         <td>${row.Plate}<br><small>${row.Name}</small></td>
                         <td class="${row.Status === 'AUTHORIZED' ? 'authorized' : 'unauthorized'}">
-                            ${row.Status}<br><small>${parseInt(row.Latency_Total_ms || 0)}ms</small>
+                            ${row.Status}
+                            <br>
+                            <small style="color:#999;">${parseInt(row.Latency_Total_ms || 0)}ms</small>
                         </td>
                     </tr>
                 `}).join('');
-            });
+            }).catch(e => console.log("History error", e));
         }
 
         // Update loop
