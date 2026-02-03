@@ -375,7 +375,7 @@ def log_event(plate, name, status, det, ocr, total_lat):
                 "Faculty": "N/A", 
                 "Status": status,
                 "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Latency_Total_ms": f"{total_lat:.2f}", # Total time from Frame -> Gate Trigger
+                "Latency_Total_ms": f"{total_lat:.2f}",
                 "Det_ms": f"{det:.2f}",
                 "OCR_ms": f"{ocr:.2f}"
             })
@@ -385,8 +385,15 @@ def log_event(plate, name, status, det, ocr, total_lat):
     if status == "AUTHORIZED":
         trigger_authorized_event()
     else:
+        # --- FIX: Handle Unauthorized Alerts Correctly ---
         if current_state == STATE_IDLE:
-            led_red_unauth.blink(n=3); buzzer.beep(n=3)
+            # 1. Blink FAST (0.1s) instead of default slow (1s)
+            led_red_unauth.blink(on_time=0.1, off_time=0.1, n=3, background=True)
+            buzzer.beep(on_time=0.1, off_time=0.1, n=3, background=True)
+            
+            # 2. Schedule Red LED to turn back ON after 700ms (0.2s * 3 = 600ms + buffer)
+            # We strictly check if we are still in IDLE to avoid turning Red on if the gate opened.
+            root.after(700, lambda: led_red_unauth.on() if current_state == STATE_IDLE else None)
 
 def trigger_authorized_event():
     # Only act if IDLE or we are looking for the "Next Vehicle" in POST_ENTRY
