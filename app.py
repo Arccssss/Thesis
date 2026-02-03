@@ -153,24 +153,27 @@ def transition_to(new_state):
         # Non-blocking delay handled in FSM loop
 
 def log_event(plate, name, status, det, ocr, total_lat):
-    global session_logs  # Access the global list for the web UI
-    ts = datetime.now().strftime("%H:%M:%S")
+    global session_logs
+    
+    # 1. Capture Time ONCE (So Web and CSV match exactly)
+    now = datetime.now()
+    display_time = now.strftime("%H:%M:%S")          # Format for Phone Screen (e.g., 14:30:05)
+    csv_timestamp = now.strftime("%Y-%m-%d %H:%M:%S") # Format for CSV File (e.g., 2026-02-03 14:30:05)
 
-    # 1. Update In-Memory List (Instead of Treeview)
+    # 2. Update In-Memory List (Web UI)
     perf = f"Det:{det:.0f}ms | OCR:{ocr:.0f}ms"
     
     log_entry = {
-        "time": ts,
+        "time": display_time, # Uses the captured time
         "plate": plate,
         "name": name,
         "status": status,
         "latency": f"{total_lat:.0f} ms",
         "metrics": perf
     }
-    # Add to the top of the list
     session_logs.insert(0, log_entry)
     
-    # 2. Save to CSV (Your exact CSV logic)
+    # 3. Save to CSV
     try:
         file_exists = os.path.isfile(LOG_FILE)
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
@@ -185,7 +188,7 @@ def log_event(plate, name, status, det, ocr, total_lat):
                 "Name": name,
                 "Faculty": "N/A", 
                 "Status": status,
-                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Timestamp": csv_timestamp, # Uses the EXACT same captured time
                 "Latency_Total_ms": f"{total_lat:.2f}",
                 "Det_ms": f"{det:.2f}",
                 "OCR_ms": f"{ocr:.2f}"
@@ -193,20 +196,17 @@ def log_event(plate, name, status, det, ocr, total_lat):
     except Exception as e:
         print(f"❌ Log Error: {e}")
 
-    # 3. Hardware Actions
+    # 4. Hardware Actions
     if status == "AUTHORIZED":
-        # In API version, checking state directly is safer
         if current_state == STATE_IDLE or current_state == STATE_POST_ENTRY:
              transition_to(STATE_OPENING)
     else:
-        # --- FIX: Handle Unauthorized Alerts (Server Compatible) ---
+        # Unauthorized Alert (Server Compatible)
         if current_state == STATE_IDLE:
-            # 1. Blink FAST (0.1s)
             led_red_unauth.blink(on_time=0.1, off_time=0.1, n=3, background=True)
             buzzer.beep(on_time=0.1, off_time=0.1, n=3, background=True)
             
-            # 2. Schedule Red LED to turn back ON after 0.7s
-            # We use threading.Timer instead of root.after because there is no GUI loop
+            # Reset LED after 0.7s
             def reset_led():
                 if current_state == STATE_IDLE:
                     led_red_unauth.on()
@@ -260,7 +260,6 @@ def camera_loop():
             t_start_process = time.perf_counter()
             
             # Note: Flask serves JPEGs which are BGR, so no need to convert to RGB for display
-            # But we process on BGR anyway.
             
             h, w, _ = frame.shape
             roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
@@ -306,13 +305,18 @@ def camera_loop():
                                         most_common, _ = Counter(scan_buffer).most_common(1)[0]
 
                                         if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
+                                            # Calculate Total Latency
                                             total_latency = (time.perf_counter() - t_start_process) * 1000
+                                            
+                                            # === THE FIX IS HERE ===
+                                            # Old Call: log_event(..., total_latency, t_detect, t_ocr, 0) -> 7 Args (Wrong)
+                                            # New Call: log_event(..., t_detect, t_ocr, total_latency) -> 6 Args (Correct)
                                             
                                             if most_common in authorized_plates:
                                                 row = auth_df[auth_df['Plate'] == most_common].iloc[0]
-                                                log_event(most_common, row['Name'], "AUTHORIZED", total_latency, t_detect, t_ocr, 0)
+                                                log_event(most_common, row['Name'], "AUTHORIZED", t_detect, t_ocr, total_latency)
                                             else:
-                                                log_event(most_common, "Unknown", "UNAUTHORIZED", total_latency, t_detect, t_ocr, 0)
+                                                log_event(most_common, "Unknown", "UNAUTHORIZED", t_detect, t_ocr, total_latency)
                                             
                                             logged_vehicles[most_common] = current_time
                                             scan_buffer.clear()
