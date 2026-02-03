@@ -16,7 +16,7 @@ from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED
 from picamera2 import Picamera2
 
 # ==========================================
-#          CONFIGURATION
+#           CONFIGURATION
 # ==========================================
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
@@ -32,7 +32,7 @@ ABSENCE_RESET_TIME = 2.5
 
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
-SENSOR_POLL_RATE = 100    
+SENSOR_POLL_RATE = 100    # Updated to 250ms as requested
 
 POST_ENTRY_DELAY = 0.5   
 EXIT_SCAN_COOLDOWN = 5.0 
@@ -60,7 +60,7 @@ try:
     led_close.on()
     
     picam2 = Picamera2()
-    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1920, 1080)})
+    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1280, 720)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3}) 
     picam2.start()
@@ -87,12 +87,8 @@ except Exception as e:
 root = tk.Tk()
 root.title("SAVES AI Control System")
 root.configure(bg="white")
-
-# [FIX] Force Fullscreen to fit ANY screen size automatically
 root.attributes('-fullscreen', True)
-
-# Allow exiting fullscreen with ESC key (useful for debugging)
-root.bind("<Escape>", lambda event: root.attributes("-fullscreen", False))
+root.bind("<Escape>", lambda event: root.attributes("-fullscreen", True))
 
 style = ttk.Style()
 style.theme_use("clam")
@@ -114,7 +110,6 @@ def show_frame(frame):
     frame.tkraise()
 
 def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=None):
-    # Reduced padding to save vertical space on small screens
     header_frame = tk.Frame(parent, bg="white", pady=5)
     header_frame.pack(fill="x", padx=10)
     header_frame.columnconfigure(0, weight=1)
@@ -130,7 +125,6 @@ def create_header(parent, title_text, sub_text=None, left_btn=None, right_btn=No
 
     title_container = tk.Frame(header_frame, bg="white")
     title_container.grid(row=0, column=1)
-    # Smaller fonts for smaller screens
     tk.Label(title_container, text=title_text, font=("Helvetica", 18, "bold"), bg="white", fg="black").pack()
     if sub_text:
         tk.Label(title_container, text=sub_text, font=("Helvetica", 10), bg="white", fg="#555").pack()
@@ -182,7 +176,7 @@ def create_treeview(parent):
 
 create_header(page_logs, "SAVES AI", "current session",
               left_btn={'text': "←  camera", 'cmd': lambda: show_frame(page_camera), 'color': '#6200ea'},
-              right_btn={'text': "past session logs  ➜", 'cmd': lambda: show_frame(page_history)})
+              right_btn={'text': "past session logs  ➜", 'cmd': lambda: [load_history_data(), show_frame(page_history)]})
 tree = create_treeview(page_logs)
 
 create_header(page_history, "SAVES AI", "past session",
@@ -219,24 +213,55 @@ def set_status(status_text, color="black"):
     system_state = status_text
     lbl_status.config(text=status_text, fg=color)
 
+def update_distance_ui(dist_cm):
+    """Helper to update UI label from anywhere"""
+    if dist_cm >= 148:
+        lbl_dist.config(text="DIST: > 150 cm", fg="black")
+    else:
+        lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
+
 def load_history_data():
-    for i in tree_history.get_children(): tree_history.delete(i)
-    if not os.path.isfile(LOG_FILE): return
+    """Load logs using EXACT CSV headers requested: Plate,Name,Faculty,Status,Timestamp,Latency,Det,OCR"""
+    for i in tree_history.get_children(): 
+        tree_history.delete(i)
+        
+    if not os.path.isfile(LOG_FILE): 
+        return
+
     try:
-        with open(LOG_FILE, 'r') as f:
+        with open(LOG_FILE, 'r', encoding='utf-8') as f:
             reader_csv = csv.DictReader(f)
-            for row in reversed(list(reader_csv)):
+            # Filter out empty rows just in case
+            rows = [r for r in reader_csv if r]
+            
+            for row in reversed(rows):
                 ts = row.get('Timestamp', '')
-                try: short_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
-                except: short_ts = ts
+                try: 
+                    short_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S")
+                except: 
+                    short_ts = ts
                 
+                # EXACT HEADERS MAPPING
                 det = row.get('Det', '0')
-                ocr = row.get('Ocr', '0')
+                ocr = row.get('OCR', '0') # Capitalized OCR per user request
+                latency = row.get('Latency', '0')
+                
                 perf_display = f"Det: {float(det):.0f}ms | OCR: {float(ocr):.0f}ms"
                 
-                tag = "authorized" if "AUTHORIZED" in row.get('Status', '') else "unauthorized"
-                tree_history.insert("", "end", values=(short_ts, row.get('Plate'), row.get('Name'), row.get('Status'), row.get('Latency') + "s", perf_display), tags=(tag,))
-    except Exception as e: print(f"Load Error: {e}")
+                status_txt = row.get('Status', '')
+                tag = "authorized" if "AUTHORIZED" in status_txt else "unauthorized"
+                
+                tree_history.insert("", "end", values=(
+                    short_ts, 
+                    row.get('Plate', ''), 
+                    row.get('Name', ''), 
+                    status_txt, 
+                    f"{float(latency):.2f}s", 
+                    perf_display
+                ), tags=(tag,))
+                
+    except Exception as e: 
+        print(f"History Load Error: {e}")
 
 def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time):
     ts_l = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -245,17 +270,33 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
     perf_display = f"Det: {det_time:.0f}ms | OCR: {ocr_time:.0f}ms"
     
     try:
+        # GUI Update
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         tree.insert("", 0, values=(ts_s, plate, name, status, f"{latency:.2f}s", perf_display), tags=(tag,))
         
+        # CSV Update - Exact Headers: Plate,Name,Faculty,Status,Timestamp,Latency,Det,OCR
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
-        with open(LOG_FILE, 'a', newline='') as f:
-            writer = csv.writer(f)
-            if not file_exists: 
-                writer.writerow(["Plate","Name","Faculty","Status","Timestamp","Latency","Det","Ocr"])
-            writer.writerow([plate, name, faculty, status, ts_l, f"{latency:.4f}", f"{det_time:.2f}", f"{ocr_time:.2f}"])
         
-        load_history_data()
+        with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=["Plate","Name","Faculty","Status","Timestamp","Latency","Det","OCR"])
+            
+            if not file_exists:
+                writer.writeheader()
+                
+            writer.writerow({
+                "Plate": plate,
+                "Name": name,
+                "Faculty": faculty,
+                "Status": status,
+                "Timestamp": ts_l,
+                "Latency": f"{latency:.4f}",
+                "Det": f"{det_time:.2f}",
+                "OCR": f"{ocr_time:.2f}"
+            })
+        
+        # Refresh history if user is looking at it
+        if page_history.winfo_ismapped():
+            load_history_data()
         
         if status == "AUTHORIZED": 
             trigger_gate_sequence()
@@ -263,7 +304,9 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
             set_status("UNAUTHORIZED DETECTED", "red")
             buzzer.beep(on_time=0.1, off_time=0.05, n=4)
             root.after(3000, lambda: set_status("SCANNING", "black") if not is_gate_busy else None)
-    except Exception as e: print(f"Log Error: {e}")
+            
+    except Exception as e: 
+        print(f"Log Error: {e}")
 
 def preprocess_plate(img):
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -311,14 +354,16 @@ def trigger_gate_sequence():
 
 def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
-    if system_state == "POST-ENTRY SCAN": return
-
+    
+    # Even if polling is 250ms, we update the logic here
     try:
         dist_cm = sensor.distance * 100
-        if dist_cm >= 148:
-            lbl_dist.config(text="DIST: > 150 cm", fg="black")
-        else:
-            lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
+        
+        # Update UI here too (redundancy ensures it updates if camera is slow)
+        update_distance_ui(dist_cm)
+
+        if system_state == "POST-ENTRY SCAN": 
+            return # Don't run gate logic, but UI update happened above
 
         if is_gate_busy and system_state != "CLOSING GATE":
             if not vehicle_confirmed:
@@ -332,7 +377,9 @@ def smart_gate_check():
                 start_post_entry_wait()
                 return
 
-    except Exception as e: print(f"Sensor Error: {e}")
+    except Exception as e: 
+        print(f"Sensor Error: {e}")
+        
     root.after(SENSOR_POLL_RATE, smart_gate_check)
 
 def start_post_entry_wait():
@@ -362,7 +409,14 @@ def update_frame():
         frame = picam2.capture_array() if picam2 else np.zeros((540, 960, 3), dtype=np.uint8)
     except: root.after(100, update_frame); return
 
-    current_dist = sensor.distance * 100
+    # --- FIX FOR ULTRASONIC FEEDBACK ---
+    # Update distance label EVERY frame so it doesn't freeze during scanning
+    try:
+        current_dist = sensor.distance * 100
+        update_distance_ui(current_dist)
+    except: pass
+    # -----------------------------------
+
     cv2.putText(frame, f"STATUS: {system_state}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
 
     h, w, _ = frame.shape
