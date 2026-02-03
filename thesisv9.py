@@ -352,14 +352,13 @@ def fsm_update_loop():
 def log_event(plate, name, faculty, status, det, ocr, total_lat):
     # 1. Capture Time
     now = datetime.now()
-    display_time = now.strftime("%H:%M:%S")      # For the screen
-    csv_timestamp = now.strftime("%Y-%m-%d %H:%M:%S") # For the file
+    display_time = now.strftime("%H:%M:%S")      
+    csv_timestamp = now.strftime("%Y-%m-%d %H:%M:%S") 
 
     # 2. Save to CSV
     try:
         file_exists = os.path.isfile(LOG_FILE)
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            # headers MUST match your Server version exactly
             headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
             writer = csv.DictWriter(f, fieldnames=headers)
             
@@ -380,12 +379,10 @@ def log_event(plate, name, faculty, status, det, ocr, total_lat):
         print(f"❌ Log Error: {e}")
 
     # 3. Update Tkinter UI Immediately
-    # This makes the new log appear on the screen instantly
     try:
         metrics = f"Det:{det:.0f} | OCR:{ocr:.0f}"
         tag = "authorized" if status == "AUTHORIZED" else "unauthorized"
         
-        # Insert at the TOP of the list (index 0)
         tree_history.insert("", 0, values=(
             display_time, 
             plate, 
@@ -398,6 +395,21 @@ def log_event(plate, name, faculty, status, det, ocr, total_lat):
         
     except Exception as e:
         print(f"UI Update Error: {e}")
+
+    # === 4. STATE MACHINE TRIGGER (THIS WAS MISSING) ===
+    if status == "AUTHORIZED":
+        # Open the gate if we are in a valid state to do so
+        if current_state == STATE_IDLE or current_state == STATE_POST_ENTRY:
+             transition_to(STATE_OPENING)
+    else:
+        # Handle UNAUTHORIZED (Blink Red LED / Buzzer)
+        if current_state == STATE_IDLE:
+            print(f"⛔ Unauthorized Access Attempt: {plate}")
+            led_red_unauth.blink(on_time=0.1, off_time=0.1, n=3, background=True)
+            buzzer.beep(on_time=0.1, off_time=0.1, n=3, background=True)
+            
+            # Reset LED to solid ON after 1 second
+            root.after(1000, lambda: led_red_unauth.on() if current_state == STATE_IDLE else None)
 
 def trigger_authorized_event():
     # Only act if IDLE or we are looking for the "Next Vehicle" in POST_ENTRY
