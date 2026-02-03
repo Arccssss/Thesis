@@ -32,10 +32,10 @@ GATE_ACTION_TIME = 3000
 ABSENCE_RESET_TIME = 10.0 
 
 # SAFETY TIMEOUT: Force reset if stuck for 15s
-GATE_SAFETY_TIMEOUT = 15.0
+GATE_SAFETY_TIMEOUT = 7.0
 
 # SENSOR SETTINGS
-SAFETY_DISTANCE_CM = 100  # Detects cars up to 1 meter
+SAFETY_DISTANCE_CM = 50  # Detects cars up to 1 meter
 ENTRY_CONFIRM_TARGET = 0.5 # Needs to see car for 0.5s total (accumulator)
 SENSOR_POLL_RATE = 100    
 
