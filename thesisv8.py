@@ -22,8 +22,8 @@ from picamera2 import Picamera2
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5  
-SCAN_BUFFER_LEN = 9  
-CONFIDENCE_THRESHOLD = 4
+SCAN_BUFFER_LEN = 5
+CONFIDENCE_THRESHOLD = 2
 
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5 
 ROI_COLOR = (0, 255, 0) 
@@ -31,12 +31,12 @@ GRACE_PERIOD = 0.3
 GATE_ACTION_TIME = 3000 
 ABSENCE_RESET_TIME = 10.0 
 
-# SAFETY TIMEOUT: Force reset if stuck for 15s
-GATE_SAFETY_TIMEOUT = 7.0
+# SAFETY TIMEOUT: Force reset if stuck open for 15s
+GATE_SAFETY_TIMEOUT = 5.0
 
-# SENSOR SETTINGS
-SAFETY_DISTANCE_CM = 50  # Detects cars up to 1 meter
-ENTRY_CONFIRM_TARGET = 0.5 # Needs to see car for 0.5s total (accumulator)
+# [FIX] SENSOR TUNING
+SAFETY_DISTANCE_CM = 100  
+ENTRY_CONFIRM_TARGET = 0.3 # Reduced to 0.3s to catch fast moving cars
 SENSOR_POLL_RATE = 100    
 
 POST_ENTRY_DELAY = 0.5   
@@ -394,7 +394,6 @@ def trigger_gate_sequence():
         led_green_auth.on(); buzzer.on(); time.sleep(0.1)
         led_green_auth.off(); buzzer.off(); time.sleep(0.1)
 
-    # --- AUTHORIZED STATE: GREEN ON ---
     led_green_auth.on()
     led_red_unauth.off()
 
@@ -411,22 +410,37 @@ def smart_gate_check():
 
         if is_gate_busy and system_state != "CLOSING GATE":
             
+            # Safety Timeout
             if gate_open_start_time and (time.time() - gate_open_start_time) > GATE_SAFETY_TIMEOUT:
                 execute_close_action()
                 return
 
-            if not vehicle_confirmed:
-                if dist_cm < SAFETY_DISTANCE_CM:
-                    accumulated_presence += (SENSOR_POLL_RATE / 1000.0)
-                    
-                    if accumulated_presence >= ENTRY_CONFIRM_TARGET:
-                        vehicle_confirmed = True
-                        led_green_auth.off()
-                        led_red_unauth.on()
+            if dist_cm < SAFETY_DISTANCE_CM:
+                # Car is detected: Add to accumulator
+                accumulated_presence += (SENSOR_POLL_RATE / 1000.0)
                 
-            elif vehicle_confirmed and dist_cm > SAFETY_DISTANCE_CM:
-                start_post_entry_wait()
-                return
+                # If we see it for just 0.3s, assume it's valid and Latch it.
+                # This handles the case where it passes through quickly.
+                if accumulated_presence >= ENTRY_CONFIRM_TARGET:
+                    vehicle_confirmed = True
+                    led_green_auth.off()
+                    led_red_unauth.on()
+            
+            # If path is CLEAR (dist > 100)
+            elif dist_cm > SAFETY_DISTANCE_CM:
+                
+                # Case 1: We already confirmed it -> It just left -> Start Post Scan
+                if vehicle_confirmed:
+                    start_post_entry_wait()
+                    return
+                
+                # [FIX] Case 2: "Fast Pass"
+                # It wasn't confirmed fully (maybe 0.2s only), but now it's gone (120cm).
+                # We assume the blip was the car passing.
+                elif accumulated_presence >= 0.2:
+                     vehicle_confirmed = True
+                     start_post_entry_wait()
+                     return
 
     except Exception as e: 
         print(f"Sensor Error: {e}")
