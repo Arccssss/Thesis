@@ -29,9 +29,7 @@ ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5
 ROI_COLOR = (0, 255, 0) 
 GRACE_PERIOD = 0.3      
 GATE_ACTION_TIME = 3000 
-
-# [FIX] INCREASED TO 10 SECONDS to prevent timer resetting during glare/flicker
-ABSENCE_RESET_TIME = 4.0 
+ABSENCE_RESET_TIME = 10.0 
 
 SAFETY_DISTANCE_CM = 50 
 ENTRY_CONFIRM_TIME = 0.5 
@@ -250,7 +248,7 @@ def update_distance_ui(dist_cm):
         lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
 
 def load_history_data():
-    """Robust History Loader - Handles crashes & missing headers"""
+    """Robust History Loader"""
     for i in tree_history.get_children(): 
         tree_history.delete(i)
         
@@ -277,7 +275,6 @@ def load_history_data():
                 try: ocr = float(row.get('OCR') or row.get('ocr', 0))
                 except ValueError: ocr = 0.0
 
-                # Note: We display 'Latency' (Processing Time) on the GUI
                 try: latency = float(row.get('Latency') or row.get('latency', 0))
                 except ValueError: latency = 0.0
                 
@@ -303,7 +300,6 @@ def log_to_gui_and_csv(plate, name, faculty, status, latency, det_time, ocr_time
         file_exists = os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > 0
         
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            # [NEW] Added 'AuthDuration' to headers. Kept hidden from frontend.
             fieldnames = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR", "AuthDuration"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             
@@ -367,7 +363,10 @@ def trigger_gate_sequence():
             led_green_auth.on(); buzzer.on(); time.sleep(0.1)
             led_green_auth.off(); buzzer.off(); time.sleep(0.1)
         
-        led_green_auth.off(); led_red_unauth.on()
+        # [FIX] Set to GREEN (Authorized) initially
+        led_green_auth.on()
+        led_red_unauth.off()
+        
         vehicle_confirmed = False
         vehicle_entry_start_time = None
         root.after(100, smart_gate_check)
@@ -387,8 +386,6 @@ def trigger_gate_sequence():
     led_red_unauth.off()
 
     gate_p1.on(); gate_p2.off()
-    
-    # smart_gate_check is already running in its own loop
 
 def smart_gate_check():
     global vehicle_entry_start_time, vehicle_confirmed, system_state
@@ -442,8 +439,10 @@ def monitor_post_entry_timer():
     countdown = max(0, EXIT_SCAN_COOLDOWN - elapsed)
     lbl_status.config(text=f"CLOSING IN: {countdown:.1f}s", fg="orange")
     
-    led_green_auth.off()
-    led_red_unauth.on()
+    # Only enforce LED state if NO new vehicle detected to avoid overriding the green blink
+    if not (is_gate_busy and not vehicle_confirmed):
+        led_green_auth.off()
+        led_red_unauth.on()
 
     if elapsed >= EXIT_SCAN_COOLDOWN:
         execute_close_action()
@@ -510,10 +509,7 @@ def update_frame():
                                 most_common, freq = Counter(scan_buffer).most_common(1)[0]
                                 if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
                                     
-                                    # [METRIC 1] Processing Latency (YOLO + OCR)
                                     latency = (t_detect + t_ocr_ms) / 1000.0
-                                    
-                                    # [METRIC 2] Auth Duration (Detection to Log) - Hidden
                                     auth_duration = current_time - first_sight_times.get(most_common, current_time)
                                     
                                     if most_common in authorized_plates:
@@ -528,10 +524,9 @@ def update_frame():
         if not detected_box and detection_start_time and (current_time - last_plate_seen_time) > ABSENCE_RESET_TIME:
             detection_start_time = None; scan_buffer.clear(); first_sight_times.clear()
 
-
     win_w = video_frame_container.winfo_width()
     win_h = video_frame_container.winfo_height()
-    
+
     if win_w > 10 and win_h > 10:
         scale = min(win_w / w, win_h / h)
         new_w, new_h = int(w * scale), int(h * scale)
