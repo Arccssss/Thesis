@@ -1,0 +1,19 @@
+description: Ultralytics YOLO26n model trained on ./License-Plate-Detection-PH-V2-1\data.yaml
+author: Ultralytics
+date: '2026-02-06T01:06:28.211368'
+version: 8.4.12
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: License-Plate
+args:
+  batch: 1
+  half: false
+channels: 3
+end2end: false

@@ -15,6 +15,9 @@ from PIL import Image, ImageTk
 from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED
 from picamera2 import Picamera2
 
+#default 
+#uses whole plate + easyOCR
+
 # ==========================================
 #           CONFIGURATION
 # ==========================================
@@ -36,7 +39,7 @@ EXIT_SCAN_COOLDOWN = 5.0  # Post-entry wait time
 SENSOR_POLL_RATE = 100    # Check sensor every 100ms
 
 # Sensor Tuning
-SAFETY_DISTANCE_CM = 100
+SAFETY_DISTANCE_CM = 50
 ENTRY_CONFIRM_TARGET = 0.5 # Seconds needed below 100cm to confirm vehicle
 ABSENCE_RESET_TIME = 10.0
 
@@ -64,7 +67,7 @@ STATE_CLOSING = "CLOSING"
 try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
     gate_p2 = OutputDevice(GATE_PIN_2, active_high=True, initial_value=True)
-    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.5, queue_len=3)
+    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.0, queue_len=3)
     buzzer = Buzzer(BUZZER_PIN)
     
     led_green_auth = LED(LED_OPEN_PIN)
@@ -242,7 +245,7 @@ except:
     auth_df = pd.DataFrame(columns=["Plate", "Name", "Faculty"])
 
 reader = easyocr.Reader(['en'], gpu=False)
-model = YOLO('./best_ncnn_model')
+model = YOLO('./models/whole_plate_detector')
 
 # ==========================================
 #           FSM TRANSITION LOGIC
@@ -310,9 +313,15 @@ def fsm_update_loop():
     # 1. Update Distance UI
     try:
         dist_cm = sensor.distance * 100
-        if dist_cm >= 148: lbl_dist.config(text="DIST: > 150 cm", fg="black")
-        else: lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
-    except: dist_cm = 999
+        # Logic: If it's at the max limit of the sensor (100cm)
+        if dist_cm >= 98: 
+            lbl_dist.config(text="DIST: Clear (>1m)", fg="black")
+        else:
+            # Green if between 50cm-100cm, Red if 0cm-50cm
+            lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", 
+                            fg="red" if dist_cm < SAFETY_DISTANCE_CM else "green")
+    except: 
+        dist_cm = 999
 
     # 2. State Specific Logic
     elapsed = time.time() - state_start_time
@@ -527,8 +536,23 @@ def update_frame():
                         if p_crop.size > 0:
                             # OCR Timer
                             t0_ocr = time.perf_counter()
+
+                            # --- NEW PREPROCESSING START ---
+                            # 1. Convert to grayscale
                             gray = cv2.cvtColor(p_crop, cv2.COLOR_BGR2GRAY)
-                            text = reader.readtext(gray, detail=0)
+                            
+                            # 2. Noise reduction (preserves edges of numbers)
+                            filtered = cv2.bilateralFilter(gray, 11, 17, 17)
+                            
+                            # 3. Thresholding (Otsu's Binarization for high contrast)
+                            _, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                            
+                            # 4. Add a small white border to clear out edge artifacts
+                            processed_crop = cv2.copyMakeBorder(thresh, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+                            # --- NEW PREPROCESSING END ---
+
+                            # Pass the processed_crop instead of the original gray
+                            text = reader.readtext(processed_crop, detail=0)
                             t_ocr = (time.perf_counter() - t0_ocr) * 1000 # ms
                             
                             clean = "".join([c for c in "".join(text).upper() if c.isalnum()])
