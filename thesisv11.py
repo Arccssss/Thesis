@@ -237,12 +237,12 @@ except:
 
 # --- MODELS INITIALIZATION ---
 # Model 1: Plate Detector (Kept as is)
-model_plate = YOLO('./models/plate_small_boundingBox') 
+model_plate = YOLO('./models/plate_small_boundingBox_ncnn_model') 
 
 # Model 2: Character Recognition (New Custom YOLO)
 # IMPORTANT: Update this path to your actual character model file
 # If you convert this to ncnn, point to the folder instead of .pt
-model_char = YOLO('./models/plate_reader_v11')
+model_char = YOLO('./models/plate_reader_v11_ncnn_model')
 
 # ==========================================
 #           FSM TRANSITION LOGIC
