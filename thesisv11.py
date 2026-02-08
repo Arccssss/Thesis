@@ -22,13 +22,13 @@ from picamera2 import Picamera2
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5
-SCAN_BUFFER_LEN = 5
-CONFIDENCE_THRESHOLD = 2
+SCAN_BUFFER_LEN = 35
+CONFIDENCE_THRESHOLD = 10
 
 # ROI & Vision
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5
 ROI_COLOR = (0, 255, 0)
-GRACE_PERIOD = 0.3
+GRACE_PERIOD = 0.5
 
 # Hardware Timings
 GATE_ACTION_TIME = 3000   # Time for gate to physically close (ms)
@@ -37,7 +37,7 @@ EXIT_SCAN_COOLDOWN = 5.0  # Post-entry wait time
 SENSOR_POLL_RATE = 100    # Check sensor every 100ms
 
 # Sensor Tuning
-SAFETY_DISTANCE_CM = 50
+SAFETY_DISTANCE_CM = 30
 ENTRY_CONFIRM_TARGET = 0.5 # Seconds needed below 100cm to confirm vehicle
 ABSENCE_RESET_TIME = 10.0
 
@@ -76,7 +76,7 @@ try:
     led_red_unauth.on()
     
     picam2 = Picamera2()
-    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1280, 720)})
+    config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1920, 1080)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3})
     picam2.start()
@@ -452,7 +452,7 @@ def update_frame():
     if should_detect:
         # Detection Timer
         t0_det = time.perf_counter()
-        results = model_plate(roi_crop, verbose=False, conf=0.6)
+        results = model_plate(roi_crop, verbose=True, conf=0.6)
         t_detect = (time.perf_counter() - t0_det) * 1000 # ms
         
         current_time = time.time()
@@ -476,7 +476,7 @@ def update_frame():
                             
                             # 1. Predict Characters using the second model
                             # agnostic_nms=True prevents different classes from overlapping
-                            results_char = model_char.predict(p_crop, conf=0.4, verbose=False, iou=0.5, agnostic_nms=True)
+                            results_char = model_char.predict(p_crop, conf=0.4, verbose=True, iou=0.5, agnostic_nms=True)
                             result_c = results_char[0]
                             
                             detected_chars = []
