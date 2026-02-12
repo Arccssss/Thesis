@@ -22,8 +22,8 @@ from picamera2 import Picamera2
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5
-SCAN_BUFFER_LEN = 5
-CONFIDENCE_THRESHOLD = 2
+SCAN_BUFFER_LEN = 35
+CONFIDENCE_THRESHOLD = 10
 
 # ROI & Vision
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5
@@ -237,12 +237,12 @@ except:
 
 # --- MODELS INITIALIZATION ---
 # Model 1: Plate Detector (Kept as is)
-model_plate = YOLO('./models/plate_small_boundingBox') 
+model_plate = YOLO('./models/plate_small_boundingBox_ncnn_model') 
 
 # Model 2: Character Recognition (New Custom YOLO)
 # IMPORTANT: Update this path to your actual character model file
 # If you convert this to ncnn, point to the folder instead of .pt
-model_char = YOLO('./models/plate_reader_v11')
+model_char = YOLO('./models/plate_reader_v11_ncnn_model')
 
 # ==========================================
 #           FSM TRANSITION LOGIC

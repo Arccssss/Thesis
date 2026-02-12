@@ -1,9 +1,6 @@
 ﻿Plate,Name,Faculty
 FAR8004,"Balatan, Lanie Mae",Staff
-,"Delumpa, Patrick John",Faculty
 FFV610,"Crisostomo, Gregorio",Faculty
-,"Capunong, Joseph C.",Staff
-,"Callao, Regie B.",Staff
 FAP6614,"Gonzales, Louie Jay",Staff
 FAS7034,"Gamboa, William D.",Staff
 FFP545,"Sumanting, Ritchel L.",Faculty
@@ -24,7 +21,6 @@ FAL4117,"Tantiado, Eleazar",Faculty
 437FEX,"Bernadas, Kurt Benedict",Staff
 DCA6306,"Fronda, Morel T.",Faculty
 ABA3937,"Ang, Glenn A.",Faculty
-,"Ang, Glenn A.",Faculty
 FAO2899,"Tupan, Jofred S.",Faculty
 FNV1491,"Faciolan, Christopher S.",Faculty
 FAB2196,"Senomio, Stephanie B.",Faculty
@@ -44,7 +40,6 @@ AAR6204,"Deldo, Renato S.",Faculty
 FGD814,"Quintanilla, Jayson John",Faculty
 FAN5930,"Plaza, Mark Jefel C.",Faculty
 FAB4346,"Mahandog, John Mark A.",Faculty
-,"Salandoni, Charlie",Staff
 ZSS333,"Labayen, Ildefonso",Faculty
 FFL762,"Tolentino, Harris M.",Faculty
 FDN504,"Bernardos, Duncan",Faculty
@@ -75,14 +70,11 @@ FAS4527,"Lirazan, Jennifer C.",Student
 455NUK,"Bolo, Rene V.",Faculty
 NFM2069,"Pagdato, Lourlen P.",Faculty
 FAG6677,"Hautea, Sandy R.",Faculty
-,"Fernando, Aldrin S.",Faculty
 FAG4430,"Claver, Rengie C.",Faculty
 F380SE,"Duran, Joenilo",Faculty
 F688RF,"Quivis, Dennis G.",Faculty
-,"Valles, Karlo Valles",Faculty
 DBI4866,"Trayco, Helen R.",Faculty
 6013,"Singuelas, Reynaldo",Staff
-,"Llorca, Elmer Andrew B",Faculty
 ABA3248,"Canon, Ruth",Concessionaire
 FET394,"Anglo, Apraille M.",Faculty
 FEW723,"Sisles, Melinda A.",Faculty
@@ -100,7 +92,6 @@ FEW176,"Singuelas, Evelyn F.",Staff
 449RIG,"Lapore, Domingo E.",Faculty
 YAN607,"Testa, Karen Krista B.",Staff
 FAN1845,"Rodrigazo, Maria Odesa T.",Concessionaire
-,"Castillon, Elmer",Faculty
 FT836,"Rodriguez, Roberto",Faculty
 FAL4966,"Galve, Anneka Zoe",Faculty
 FAR7909,"Simeon, Kent Red Matthew",Faculty
@@ -109,12 +100,10 @@ FAS5478,"Amodia, Daryl",Faculty
 NFF6673,"Defe, Gershom A.",Faculty
 FAB5211,"Jeruta, Charisse",Faculty
 FAP1238,"Antonio, Ace Zander",Faculty
-,"Moreño, Jasha Nicole",Staff
 UTB835,"Sumugat, Joel B.",Faculty
 F585SR,"Flores, Ceasar O.",Faculty
 GBA4749,"Asuncion, Fritzie",Faculty
 FAC4505,"Asuncion, Fritzie",Faculty
-,"Aguado, Diego G. Jr.",Faculty
 AAD7745,"Espinosa, Precioso Jr.",Staff
 FAT4007,"Validor, John Rey A.",Staff
 GAJ8112,"Hortillosa, Jovel Christian B.",Student
@@ -159,7 +148,6 @@ FAE4322,"Yulo, Christopher Dave Ryan B.",Student
 F273QM,"Baylon, Christopher D.",Student
 F915SL,"Alejandrino, James T.",Student
 NA39703,"Delatina, Angelo M.",Student
-,"Verterra, John Khris Arnel G.",Student
 60410,"Pama, Juan Carlo",Student
 168FEI,"Efren, Maritoni B.",Student
 F695KN,"Gulmatico, Rosven P.",Student
@@ -178,8 +166,6 @@ FJ101C,"Alandre, Dyle Francis B.",Student
 FH256P,"Dagatantan, Janrich T.",Student
 F999QQ,"Flor, Evann Oscar L.",Student
 60107,"Miguel, Antonio Delon G.",Student
-,"Refe, Samelyn D.",Student
-,"Cordova, Jan Horace B.",Student
 F274QE,"Abas, Hallel Wynfreth C.",Student
 UCP977,"Jalandoni, Benedict James B.",Student
 FEM409,"Lacson, Miguel Antonio P.",Student
@@ -188,5 +174,5 @@ FAG1520,"Alegato, Daisy Jane D.",Student
 940FPC,"Castillo, Gerald Joseph T.",Student
 FD917N,"Gasparillo, Xander Louis B.",Student
 FG580N,"Padilla, John Fritz T.",Student
-,"Bacornay, Jash Rey A.",Student
 F759RJ,"Mainar, Neil V.",Student
+YEA383,"Geagoni, Ptheusen B.",Student
