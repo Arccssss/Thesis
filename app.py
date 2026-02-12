@@ -1,5 +1,4 @@
 import cv2
-import easyocr
 import numpy as np
 from ultralytics import YOLO
 import time
@@ -8,7 +7,6 @@ import os
 import sys
 import threading
 import csv
-import json
 from datetime import datetime
 from collections import Counter, deque
 from flask import Flask, render_template, Response, jsonify, request
@@ -16,24 +14,27 @@ from gpiozero import OutputDevice, DistanceSensor, Buzzer, LED
 from picamera2 import Picamera2
 
 # ==========================================
-#           CONFIGURATION
+#            CONFIGURATION
 # ==========================================
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5
-SCAN_BUFFER_LEN = 5
-CONFIDENCE_THRESHOLD = 2
+SCAN_BUFFER_LEN = 35  # Increased buffer from source code
+CONFIDENCE_THRESHOLD = 0.4
 
+# ROI & Vision
 ROI_SCALE_W, ROI_SCALE_H = 0.7, 0.5
 ROI_COLOR = (0, 255, 0)
-GRACE_PERIOD = 0.3
+GRACE_PERIOD = 0.5
 
+# Hardware Timings
 GATE_ACTION_TIME = 3.0   # seconds
 GATE_SAFETY_TIMEOUT = 20.0
 EXIT_SCAN_COOLDOWN = 5.0
 SENSOR_POLL_RATE = 0.1   # seconds
 
-SAFETY_DISTANCE_CM = 100
+# Sensor Tuning
+SAFETY_DISTANCE_CM = 30 # Matches source code
 ENTRY_CONFIRM_TARGET = 0.5
 ABSENCE_RESET_TIME = 10.0
 
@@ -46,7 +47,7 @@ BUZZER_PIN = 22
 LED_OPEN_PIN = 5
 LED_CLOSE_PIN = 6
 
-# States
+# FSM States
 STATE_IDLE = "IDLE"
 STATE_OPENING = "OPENING"
 STATE_WAITING_ENTRY = "WAITING_ENTRY"
@@ -54,7 +55,7 @@ STATE_POST_ENTRY = "POST_ENTRY"
 STATE_CLOSING = "CLOSING"
 
 # ==========================================
-#           GLOBAL VARIABLES
+#            GLOBAL VARIABLES
 # ==========================================
 app = Flask(__name__)
 
@@ -73,10 +74,10 @@ last_plate_seen_time = 0
 # Web Globals
 output_frame = None
 lock = threading.Lock()
-session_logs = []  # Stores current session logs for the UI
+session_logs = [] 
 
 # ==========================================
-#           HARDWARE INIT
+#            HARDWARE INIT
 # ==========================================
 try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
@@ -86,10 +87,12 @@ try:
     led_green_auth = LED(LED_OPEN_PIN)
     led_red_unauth = LED(LED_CLOSE_PIN)
     
+    # Initial State
     led_green_auth.off()
     led_red_unauth.on()
     
     picam2 = Picamera2()
+    # 1280x720 is usually better for streaming than 1920x1080 to reduce latency
     config = picam2.create_preview_configuration(main={"format": "BGR888", "size": (1280, 720)})
     picam2.configure(config)
     picam2.set_controls({"AfMode": 2, "AwbMode": 3})
@@ -97,9 +100,23 @@ try:
     print("✅ Hardware Initialized")
 except Exception as e:
     print(f"⚠️ HARDWARE ERROR: {e}")
-    sys.exit(1)
+    # Dummy classes for testing without hardware
+    class DummyDev: 
+        def on(self): pass
+        def off(self): pass
+        def beep(self, *args, **kwargs): pass
+        def blink(self, *args, **kwargs): pass
+        @property
+        def value(self): return 0
+        @property
+        def distance(self): return 1.5 
+    gate_p1 = gate_p2 = sensor = buzzer = DummyDev()
+    led_green_auth = led_red_unauth = DummyDev()
+    picam2 = None
 
-# Load Database & Models
+# ==========================================
+#            MODELS INITIALIZATION
+# ==========================================
 try:
     auth_df = pd.read_csv(AUTH_FILE, dtype=str)
     auth_df['Plate'] = auth_df['Plate'].str.strip().str.upper()
@@ -108,22 +125,18 @@ except:
     authorized_plates = []
     auth_df = pd.DataFrame(columns=["Plate", "Name", "Faculty"])
 
-reader = easyocr.Reader(['en'], gpu=False)
-model = YOLO('./best_ncnn_model')
+# --- LOAD YOUR CUSTOM MODELS ---
+print("⏳ Loading Models...")
+# Model 1: Plate Detector
+model_plate = YOLO('./models/plate_small_boundingBox_ncnn_model') 
+
+# Model 2: Character Recognition (The Custom YOLO model)
+model_char = YOLO('./models/plate_reader_v11_ncnn_model')
+print("✅ Models Loaded")
 
 # ==========================================
-#           HELPER FUNCTIONS
+#            HELPER FUNCTIONS
 # ==========================================
-def fix_reversed_plate(text):
-    if len(text) < 4: return text
-    if text[0].isdigit() and text[-1].isalpha():
-        split_index = -1
-        for i, char in enumerate(text):
-            if char.isalpha(): split_index = i; break
-        if split_index > 0:
-            return text[split_index:] + text[:split_index]
-    return text
-
 def transition_to(new_state):
     global current_state, state_start_time, accumulated_presence
     current_state = new_state
@@ -150,7 +163,6 @@ def transition_to(new_state):
     elif new_state == STATE_CLOSING:
         gate_p1.off(); gate_p2.on()
         led_green_auth.off(); led_red_unauth.on()
-        # Non-blocking delay handled in FSM loop
 
 def log_event(plate, name, faculty, status, det, ocr, total_lat):
     global session_logs
@@ -160,7 +172,7 @@ def log_event(plate, name, faculty, status, det, ocr, total_lat):
     csv_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
     # Update In-Memory List (Web UI)
-    perf = f"Det:{det:.0f}ms | OCR:{ocr:.0f}ms"
+    perf = f"Det:{det:.0f} | OCR:{ocr:.0f}"
     log_entry = {
         "time": display_time,
         "plate": plate,
@@ -175,17 +187,13 @@ def log_event(plate, name, faculty, status, det, ocr, total_lat):
     try:
         file_exists = os.path.isfile(LOG_FILE)
         with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            # Ensure headers match your actual CSV structure
             headers = ["Plate", "Name", "Faculty", "Status", "Timestamp", "Latency", "Det", "OCR"]
             writer = csv.DictWriter(f, fieldnames=headers)
-            
-            if not file_exists:
-                writer.writeheader()
-                
+            if not file_exists: writer.writeheader()
             writer.writerow({
                 "Plate": plate,
                 "Name": name,
-                "Faculty": faculty,  # <--- NOW USES THE REAL FACULTY
+                "Faculty": faculty,
                 "Status": status,
                 "Timestamp": csv_timestamp,
                 "Latency": f"{total_lat:.2f}",
@@ -208,7 +216,7 @@ def log_event(plate, name, faculty, status, det, ocr, total_lat):
             threading.Timer(0.7, reset_led).start()
 
 # ==========================================
-#           BACKGROUND LOOPS
+#            BACKGROUND LOOPS
 # ==========================================
 def fsm_loop():
     global accumulated_presence, last_distance_cm, current_state
@@ -239,7 +247,6 @@ def fsm_loop():
                 transition_to(STATE_CLOSING)
 
         elif current_state == STATE_CLOSING:
-            # Handle the 3 second closing delay here instead of root.after
             if elapsed >= GATE_ACTION_TIME:
                 transition_to(STATE_IDLE)
 
@@ -248,27 +255,30 @@ def fsm_loop():
 def camera_loop():
     global output_frame, detection_start_time, last_plate_seen_time, logged_vehicles
     
+    if picam2 is None: return 
+
     while True:
         try:
             frame = picam2.capture_array()
+            # Picamera2 returns BGR (if configured that way), Flask needs RGB to display correctly?
+            # Actually cv2.imencode expects BGR, so we keep it BGR for encoding.
+            # But we might need RGB for drawing? OpenCV drawing works on BGR.
+            
             t_start_process = time.perf_counter()
             
-            # Note: Flask serves JPEGs which are BGR, so no need to convert to RGB for display
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
             h, w, _ = frame.shape
             roi_x, roi_y = int(w*(1-ROI_SCALE_W)//2), int(h*(1-ROI_SCALE_H)//2)
             roi_w, roi_h = int(w*ROI_SCALE_W), int(h*ROI_SCALE_H)
             
-            # Draw ROI on frame
             cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), ROI_COLOR, 3)
             roi_crop = frame[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
 
             should_detect = (current_state == STATE_IDLE) or (current_state == STATE_POST_ENTRY)
 
             if should_detect:
+                # --- 1. PLATE DETECTION ---
                 t0_det = time.perf_counter()
-                results = model(roi_crop, verbose=False, conf=0.4)
+                results = model_plate(roi_crop, verbose=False, conf=0.6)
                 t_detect = (time.perf_counter() - t0_det) * 1000
                 
                 current_time = time.time()
@@ -287,37 +297,52 @@ def camera_loop():
 
                                 p_crop = roi_crop[y1:y2, x1:x2]
                                 if p_crop.size > 0:
+                                    
+                                    # --- 2. CUSTOM YOLO OCR (From Source Code) ---
                                     t0_ocr = time.perf_counter()
-                                    gray = cv2.cvtColor(p_crop, cv2.COLOR_BGR2GRAY)
-                                    text = reader.readtext(gray, detail=0)
+                                    
+                                    # Predict Characters
+                                    results_char = model_char.predict(p_crop, conf=0.4, verbose=False, iou=0.5, agnostic_nms=True)
+                                    result_c = results_char[0]
+                                    
+                                    detected_chars = []
+                                    
+                                    if len(result_c.boxes) > 0:
+                                        for char_box in result_c.boxes:
+                                            # Get X coordinate for sorting
+                                            c_x1 = float(char_box.xyxy[0][0])
+                                            # Get Class Name
+                                            cls_id = int(char_box.cls[0])
+                                            character = model_char.names[cls_id]
+                                            detected_chars.append((c_x1, character))
+                                        
+                                        # Sort Left to Right
+                                        detected_chars.sort(key=lambda x: x[0])
+                                        
+                                        # Join to string
+                                        clean = "".join([c for _, c in detected_chars])
+                                    else:
+                                        clean = ""
+
                                     t_ocr = (time.perf_counter() - t0_ocr) * 1000
                                     
-                                    clean = "".join([c for c in "".join(text).upper() if c.isalnum()])
-                                    clean = fix_reversed_plate(clean)
-
+                                    # --- 3. CHECK LOGIC ---
                                     if len(clean) > 3:
                                         scan_buffer.append(clean)
                                         most_common, _ = Counter(scan_buffer).most_common(1)[0]
 
                                         if (current_time - logged_vehicles.get(most_common, 0)) > LOG_COOLDOWN:
-                                            # Calculate Total Latency
                                             total_latency = (time.perf_counter() - t_start_process) * 1000
                                             
-                                            print(f"⏱️ TIMING DEBUG: Det={t_detect:.2f}ms | OCR={t_ocr:.2f}ms | Total={total_latency:.2f}ms", flush=True)
+                                            print(f"⏱️ Plate: {most_common} | Det:{t_detect:.0f}ms | OCR:{t_ocr:.0f}ms")
 
                                             if most_common in authorized_plates:
-                                                # Fetch the row for this plate
                                                 row = auth_df[auth_df['Plate'] == most_common].iloc[0]
-                                                
-                                                # === GET FACULTY SAFELY ===
-                                                # If 'Faculty' column is empty or missing, default to "N/A"
                                                 user_faculty = row.get('Faculty', 'N/A')
                                                 if pd.isna(user_faculty): user_faculty = "N/A"
 
-                                                # Pass user_faculty to log_event
                                                 log_event(most_common, row['Name'], user_faculty, "AUTHORIZED", t_detect, t_ocr, total_latency)
                                             else:
-                                                # Unauthorized users have no faculty
                                                 log_event(most_common, "Unknown", "N/A", "UNAUTHORIZED", t_detect, t_ocr, total_latency)
                                             
                                             logged_vehicles[most_common] = current_time
@@ -337,7 +362,7 @@ def camera_loop():
             time.sleep(0.1)
 
 # ==========================================
-#           FLASK ROUTES
+#            FLASK ROUTES
 # ==========================================
 @app.route('/')
 def index():
@@ -347,6 +372,7 @@ def gen_frames():
     while True:
         with lock:
             if output_frame is None:
+                time.sleep(0.01)
                 continue
             frame_data = output_frame
         yield (b'--frame\r\n'
@@ -369,19 +395,16 @@ def api_status():
 def api_logs():
     return jsonify(session_logs)
 
-# Replace the existing @app.route('/api/history') with this:
 @app.route('/api/history')
 def api_history():
     history = []
-    
     if not os.path.exists(LOG_FILE):
         return jsonify([])
 
     try:
         with open(LOG_FILE, 'r', encoding='utf-8', errors='ignore') as f:
             f.seek(0, os.SEEK_END)
-            if f.tell() == 0:
-                return jsonify([])
+            if f.tell() == 0: return jsonify([])
             f.seek(0)
 
             reader = csv.DictReader(f)
@@ -389,10 +412,6 @@ def api_history():
             
             for row in reversed(raw_data):
                 if not row.get('Plate'): continue
-                
-                # === THE FIX ===
-                # We use .get(..., "0") to safely grab latency. 
-                # If the column is missing (old logs), it defaults to "0" instead of crashing.
                 clean_entry = {
                     "Timestamp": row.get("Timestamp", ""),
                     "Plate":     row.get("Plate", "Unknown"),
@@ -401,46 +420,35 @@ def api_history():
                     "Latency":   row.get("Latency", "0") 
                 }
                 history.append(clean_entry)
-
     except Exception as e:
-        print(f"⚠️ HISTORY ERROR: {e}", flush=True)
+        print(f"⚠️ HISTORY ERROR: {e}")
         return jsonify([])
         
     return jsonify(history[:50])
 
 @app.route('/api/reset', methods=['POST'])
 def api_reset():
-    # 1. Print immediately to terminal
-    print("\n🔵 WEB COMMAND RECEIVED: RESET", flush=True)
-    
-    # 2. Perform logic
+    print("\n🔵 WEB COMMAND RECEIVED: RESET")
     transition_to(STATE_IDLE)
     buzzer.beep(on_time=0.1, off_time=0.1, n=1, background=True)
-    
     return jsonify({"success": True})
 
 @app.route('/api/shutdown', methods=['POST'])
 def api_shutdown():
-    # 1. Print immediately to terminal
-    print("\n🔴 WEB COMMAND RECEIVED: SHUTDOWN", flush=True)
-    
-    # 2. Define the delayed kill function
+    print("\n🔴 WEB COMMAND RECEIVED: SHUTDOWN")
     def delayed_kill():
-        time.sleep(1.0) # Wait 1s for the phone to get the "OK" message
-        print("🛑 SYSTEM: Killing process now...", flush=True)
+        time.sleep(1.0) 
+        print("🛑 SYSTEM: Killing process now...")
         gate_p1.off()
         gate_p2.on()
         led_green_auth.off()
         led_red_unauth.off()
         os._exit(0)
-
-    # 3. Start the delay in background so we can reply to the phone first
     threading.Thread(target=delayed_kill).start()
-    
     return jsonify({"success": True})
 
 # ==========================================
-#           MAIN ENTRY
+#            MAIN ENTRY
 # ==========================================
 if __name__ == '__main__':
     # Start Background Threads
@@ -450,5 +458,5 @@ if __name__ == '__main__':
     t_fsm.start()
     t_cam.start()
     
-    # Run Flask Server (Host 0.0.0.0 makes it accessible on network)
+    # Run Flask Server
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
