@@ -19,7 +19,7 @@ from picamera2 import Picamera2
 AUTH_FILE = 'Database/authorized.csv'
 LOG_FILE = 'Database/access_logs.csv'
 LOG_COOLDOWN = 5
-SCAN_BUFFER_LEN = 35  # Increased buffer from source code
+SCAN_BUFFER_LEN = 35 
 CONFIDENCE_THRESHOLD = 0.4
 
 # ROI & Vision
@@ -28,14 +28,14 @@ ROI_COLOR = (0, 255, 0)
 GRACE_PERIOD = 0.5
 
 # Hardware Timings
-GATE_ACTION_TIME = 3.0   # seconds
+GATE_ACTION_TIME = 3.0   
 GATE_SAFETY_TIMEOUT = 20.0
 EXIT_SCAN_COOLDOWN = 5.0
-SENSOR_POLL_RATE = 0.1   # seconds
+SENSOR_POLL_RATE = 0.1   
 
-# Sensor Tuning
-SAFETY_DISTANCE_CM = 30 # Matches source code
-ENTRY_CONFIRM_TARGET = 0.5
+# Sensor Tuning (UPDATED)
+SAFETY_DISTANCE_CM = 100      # Changed to 1m
+ENTRY_CONFIRM_TARGET = 1.0    # Changed to 1.0 second
 ABSENCE_RESET_TIME = 10.0
 
 # Hardware Pins
@@ -82,7 +82,7 @@ session_logs = []
 try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
     gate_p2 = OutputDevice(GATE_PIN_2, active_high=True, initial_value=True)
-    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.5, queue_len=3)
+    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=3.0, queue_len=3)
     buzzer = Buzzer(BUZZER_PIN)
     led_green_auth = LED(LED_OPEN_PIN)
     led_red_unauth = LED(LED_CLOSE_PIN)
@@ -223,7 +223,9 @@ def fsm_loop():
     
     while True:
         try:
-            last_distance_cm = sensor.distance * 100
+            # Get raw distance
+            raw_dist = sensor.distance * 100
+            last_distance_cm = raw_dist
         except: 
             last_distance_cm = 999.0
 
@@ -235,12 +237,16 @@ def fsm_loop():
         elif current_state == STATE_WAITING_ENTRY:
             if elapsed > GATE_SAFETY_TIMEOUT:
                 transition_to(STATE_CLOSING)
-            elif last_distance_cm < SAFETY_DISTANCE_CM:
+            
+            if last_distance_cm < SAFETY_DISTANCE_CM:
                 accumulated_presence += SENSOR_POLL_RATE
                 if accumulated_presence >= ENTRY_CONFIRM_TARGET:
-                    transition_to(STATE_POST_ENTRY)
+                    pass 
             else:
-                accumulated_presence = 0.0
+                if accumulated_presence >= ENTRY_CONFIRM_TARGET:
+                    transition_to(STATE_POST_ENTRY)
+                else:
+                    accumulated_presence = 0.0
 
         elif current_state == STATE_POST_ENTRY:
             if elapsed >= EXIT_SCAN_COOLDOWN:
@@ -385,9 +391,13 @@ def video_feed():
 @app.route('/api/status')
 def api_status():
     global last_distance_cm, current_state
+    display_dist = round(last_distance_cm, 1)
+    if display_dist > 100:
+        display_dist = "Clear (>1m)"
+
     return jsonify({
         "state": current_state,
-        "distance": round(last_distance_cm, 1),
+        "distance": display_dist,
         "status_color": "green" if current_state in [STATE_OPENING, STATE_WAITING_ENTRY] else "black"
     })
 
