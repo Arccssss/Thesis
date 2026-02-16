@@ -37,8 +37,8 @@ EXIT_SCAN_COOLDOWN = 5.0  # Post-entry wait time
 SENSOR_POLL_RATE = 100    # Check sensor every 100ms
 
 # Sensor Tuning
-SAFETY_DISTANCE_CM = 30
-ENTRY_CONFIRM_TARGET = 0.5 # Seconds needed below 100cm to confirm vehicle
+SAFETY_DISTANCE_CM = 100
+ENTRY_CONFIRM_TARGET = 1 # Seconds needed below 100cm to confirm vehicle
 ABSENCE_RESET_TIME = 10.0
 
 # --- HARDWARE PINS ---
@@ -65,7 +65,7 @@ STATE_CLOSING = "CLOSING"
 try:
     gate_p1 = OutputDevice(GATE_PIN_1, active_high=True, initial_value=False)
     gate_p2 = OutputDevice(GATE_PIN_2, active_high=True, initial_value=True)
-    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=1.0, queue_len=3)
+    sensor = DistanceSensor(echo=US_ECHO_PIN, trigger=US_TRIG_PIN, max_distance=3.0, queue_len=3)
     buzzer = Buzzer(BUZZER_PIN)
     
     led_green_auth = LED(LED_OPEN_PIN)
@@ -305,7 +305,8 @@ def fsm_update_loop():
     # 1. Update Distance UI
     try:
         dist_cm = sensor.distance * 100
-        if dist_cm >= 98: 
+        # Display logic: Only show values up to 100cm (1m)
+        if dist_cm >= 100: 
             lbl_dist.config(text="DIST: Clear (>1m)", fg="black")
         else:
             lbl_dist.config(text=f"DIST: {dist_cm:.1f} cm", 
@@ -328,9 +329,14 @@ def fsm_update_loop():
         if dist_cm < SAFETY_DISTANCE_CM:
             accumulated_presence += (SENSOR_POLL_RATE / 1000.0)
             if accumulated_presence >= ENTRY_CONFIRM_TARGET:
-                transition_to(STATE_POST_ENTRY)
+                lbl_status.config(text="VEHICLE DETECTED - HOLDING", fg="blue")
+            else:
+                lbl_status.config(text="WAITING ENTRY...", fg="green")
         else:
-            accumulated_presence = 0.0
+            if accumulated_presence >= ENTRY_CONFIRM_TARGET:
+                transition_to(STATE_POST_ENTRY)
+            else:
+                accumulated_presence = 0.0
 
     elif current_state == STATE_POST_ENTRY:
         remaining = max(0, EXIT_SCAN_COOLDOWN - elapsed)
